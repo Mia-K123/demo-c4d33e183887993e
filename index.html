@@ -58,6 +58,15 @@
   #toast { position: fixed; left: 50%; top: 40%; transform: translate(-50%, 10px); max-width: 86vw; padding: 10px 14px; border-radius: 12px; background: rgba(20,26,36,.95);
     border: 1px solid var(--line); font-size: 14px; opacity: 0; transition: .25s; pointer-events: none; z-index: 6; }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  #btnAR.disabled { opacity: .45; }
+  #arOverlay { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 20; }
+  #arOverlay .ar-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 14px calc(env(safe-area-inset-bottom) + 14px);
+    display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #arHint { margin: 0; padding: 8px 14px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line);
+    font-size: 13px; line-height: 1.45; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); max-width: 92vw; text-align: center; }
+  #arOverlay .ar-actions { display: flex; gap: 10px; pointer-events: auto; justify-content: center; width: 100%; }
+  body.ar header, body.ar footer, body.ar #gesture, body.ar #hand, body.ar #help, body.ar #intro, body.ar #shade, body.ar #labels, body.ar #video { visibility: hidden; }
   @media (max-width: 600px) { .lbl small { display: none; } .lbl { font-size: 11.5px; padding: 3px 7px; } }
   @media (min-width: 900px) { .title h1 { font-size: 20px; } #hand { width: 160px; height: 120px; } .lbl { font-size: 13.5px; } }
 </style>
@@ -84,7 +93,7 @@
     <tr><td>👋</td><td><b>手左右／上下移動</b>：旋轉模型</td></tr>
     <tr><td>👆</td><td><b>沒有相機時</b>：單指拖曳旋轉、雙指縮放、點兩下展開／收合</td></tr>
   </table>
-  <div class="sub">手離鏡頭約 40–70 公分、光線充足時最準。相機畫面只在你的手機上處理，不會上傳。</div>
+  <div class="sub">手離鏡頭約 40–70 公分、光線充足時最準。相機畫面只在你的手機上處理，不會上傳。<br>右上「AR」：Quest 與安卓可把伺服器放到真實桌上；iPhone 會開啟 Quick Look。</div>
 </div>
 <footer>
   <button id="btnReset" class="btn small">重置</button>
@@ -101,6 +110,18 @@
 </div>
 <div id="loading"><div id="loadtxt">載入伺服器模型…</div></div>
 <div id="toast"></div>
+
+<div id="arOverlay">
+  <div class="ar-bar">
+    <p id="arHint">對準桌面或地面，點一下或捏合即可放置</p>
+    <div class="ar-actions">
+      <button id="btnARPlace" class="btn small" type="button">移動</button>
+      <button id="btnARToggle" class="btn primary" type="button">展開</button>
+      <button id="btnARExit" class="btn" type="button" style="flex:0 0 auto;width:auto;padding:0 16px">結束 AR</button>
+    </div>
+  </div>
+</div>
+
 <script type="module" src="./app.js"></script>
 </body>
 </html>

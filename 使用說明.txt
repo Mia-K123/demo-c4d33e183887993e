@@ -25,8 +25,12 @@
 電腦鍵盤：空白鍵或 E 切換、O 展開、C 收合、方向鍵旋轉、+ / - 縮放
 
 【AR】
-iPhone 右上「AR」→ 開啟 models/server_anim.usdz，放到桌上會自動循環「展開→收合」動畫
-Android 右上「AR」→ Google Scene Viewer（靜態模型，需 HTTPS 網址）
+右上「AR」按鈕：
+- Meta Quest 3 / 3S 瀏覽器、支援 ARCore 的安卓 Chrome：進入網頁 AR。對準桌面或地面，點一下或捏合（手勢／控制器選取）即可放置約 44 公分寬的實體大小伺服器；點模型或按「展開」可分層，按「移動」可重新放置，按「結束 AR」離開。進入 AR 時會暫停網頁相機，結束後若先前有開相機會自動恢復。
+- 不支援網頁 AR 的安卓：改開 Google Scene Viewer（靜態模型，需 HTTPS 網址）。
+- iPhone / iPad：開啟 models/server_anim.usdz 的 Quick Look，放到桌上會自動循環「展開→收合」動畫。
+- 電腦瀏覽器：按鈕會提示改用手機或 Quest。
+Quest 第一次進入需允許瀏覽器的相機與空間（追蹤）權限，並在光線充足、有平面的房間使用。
 
 【檔案】
 index.html / app.js       網頁本體（app.js 已內含 Three.js 與 MediaPipe）

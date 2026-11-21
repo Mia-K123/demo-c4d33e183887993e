@@ -18,6 +18,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true,
 renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 1.75));
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -39,6 +41,8 @@ shadow.rotation.x = -Math.PI / 2; pivot.add(shadow);
 const parts = []; const groups = {}; const frameInfo = { r0: 1, r1: 1, c0: 0.3, c1: 0.5 };
 const ORDER = { cover: 0, pcie: 0.06, cpu: 0.12, fan: 0.1, ram: 0.18, psu: 0.08, bezel: 0.04, drive: 0.1, board: 0.22, chassis: 0.22 };
 const S = 4; // 放大倍率：模型 0.43 m → 約 1.7 單位
+const AR_WIDTH = 0.44; // AR 實體寬度約 44 公分（2U 機箱）
+let modelRoot = null, modelWidth1 = 0.434;
 
 async function loadModel() {
   const [meta, gltf] = await Promise.all([
@@ -47,9 +51,10 @@ async function loadModel() {
       if (e.total) $('#loadtxt').textContent = `載入伺服器模型… ${Math.round(e.loaded / e.total * 100)}%`;
     }),
   ]);
-  const root = gltf.scene; root.scale.setScalar(S);
+  const root = gltf.scene; modelRoot = root; root.scale.setScalar(S);
   const box = new THREE.Box3().setFromObject(root); const c = box.getCenter(new THREE.Vector3());
   root.position.set(-c.x, -box.min.y, -c.z); pivot.add(root);
+  modelWidth1 = (box.max.x - box.min.x) / S;
   shadow.scale.set((box.max.x - box.min.x) * 1.5, (box.max.z - box.min.z) * 1.3, 1); shadow.position.y = 0.002;
   root.traverse((o) => {
     const m = meta.objects[o.name]; if (!m) return;
@@ -72,6 +77,18 @@ async function loadModel() {
   setExplodePositions(0);
 }
 
+function layoutModel(scale) {
+  if (!modelRoot) return;
+  modelRoot.scale.setScalar(scale);
+  modelRoot.position.set(0, 0, 0);
+  modelRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  const c = box.getCenter(new THREE.Vector3());
+  modelRoot.position.set(-c.x, -box.min.y, -c.z);
+  shadow.scale.set((box.max.x - box.min.x) * 1.5, (box.max.z - box.min.z) * 1.3, 1);
+  shadow.position.y = 0.002;
+}
+
 const ease = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 function setExplodePositions(t) {
   for (const p of parts) {
@@ -81,6 +98,7 @@ function setExplodePositions(t) {
 }
 
 function resize() {
+  if (renderer.xr.isPresenting) return;
   const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize); resize();
@@ -111,7 +129,8 @@ function updateLabels() {
 }
 
 let last = performance.now();
-function frame(now) {
+function frame(now, xrFrame) {
+  if (now == null) now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   // 平滑動畫
   const sp = 1 - Math.exp(-dt * 3.2);
@@ -120,20 +139,30 @@ function frame(now) {
   state.yaw += (state.tYaw - state.yaw) * sp * 2; state.pitch += (state.tPitch - state.pitch) * sp * 2;
   state.zoom += (state.tZoom - state.zoom) * sp * 2;
   setExplodePositions(state.explode);
-  pivot.rotation.y = state.yaw;
-  const fovV = THREE.MathUtils.degToRad(camera.fov / 2), fovH = Math.atan(Math.tan(fovV) * camera.aspect);
-  const e = ease(state.explode), portrait = camera.aspect < 1;
-  const rad = frameInfo.r0 + (frameInfo.r1 - frameInfo.r0) * e, cy = frameInfo.c0 + (frameInfo.c1 - frameInfo.c0) * e;
-  const dist = rad / Math.sin(Math.min(fovV, fovH)) * (portrait ? 1.0 - 0.2 * e : 0.88) / state.zoom;
-  camera.position.set(0, cy + Math.sin(state.pitch) * dist, Math.cos(state.pitch) * dist);
-  camera.lookAt(0, cy - rad * (portrait ? 0.06 : 0.04), 0);
-  renderer.render(scene, camera); updateLabels();
-  if (state.camOn) detect(now);
-  requestAnimationFrame(frame);
+
+  if (renderer.xr.isPresenting) {
+    updateAR(xrFrame);
+  } else {
+    pivot.rotation.y = state.yaw;
+    const fovV = THREE.MathUtils.degToRad(camera.fov / 2), fovH = Math.atan(Math.tan(fovV) * camera.aspect);
+    const e = ease(state.explode), portrait = camera.aspect < 1;
+    const rad = frameInfo.r0 + (frameInfo.r1 - frameInfo.r0) * e, cy = frameInfo.c0 + (frameInfo.c1 - frameInfo.c0) * e;
+    const dist = rad / Math.sin(Math.min(fovV, fovH)) * (portrait ? 1.0 - 0.2 * e : 0.88) / state.zoom;
+    camera.position.set(0, cy + Math.sin(state.pitch) * dist, Math.cos(state.pitch) * dist);
+    camera.lookAt(0, cy - rad * (portrait ? 0.06 : 0.04), 0);
+    updateLabels();
+    if (state.camOn) detect(now);
+  }
+  renderer.render(scene, camera);
 }
 
 // ---------- UI / 觸控 / 滑鼠 / 鍵盤 ----------
-function setTarget(v) { state.target = v; $('#btnToggle').textContent = v ? '收合' : '展開'; $('#btnToggle').classList.toggle('on', !!v); }
+function setTarget(v) {
+  state.target = v;
+  const label = v ? '收合' : '展開';
+  $('#btnToggle').textContent = label; $('#btnToggle').classList.toggle('on', !!v);
+  const b = $('#btnARToggle'); if (b) { b.textContent = label; b.classList.toggle('on', !!v); }
+}
 $('#btnToggle').onclick = () => setTarget(state.target ? 0 : 1);
 $('#btnReset').onclick = () => { state.tYaw = YAW0; state.tPitch = PITCH0; state.tZoom = 1; setTarget(0); };
 $('#btnHelp').onclick = () => $('#help').classList.toggle('show');
@@ -161,12 +190,255 @@ addEventListener('keydown', (e) => {
   else if (k === '+' || k === '=') state.tZoom = clampZ(state.tZoom * 1.15); else if (k === '-') state.tZoom = clampZ(state.tZoom / 1.15);
 });
 
-// AR 連結（iPhone：USDZ 動畫；Android：Scene Viewer GLB）
-const ua = navigator.userAgent; const isIOS = /iP(hone|ad|od)/.test(ua) || (ua.includes('Mac') && navigator.maxTouchPoints > 1);
-const ar = $('#btnAR');
-if (isIOS) { ar.href = rel('models/server_anim.usdz'); ar.rel = 'ar'; ar.innerHTML = '<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">AR'; }
-else if (/Android/.test(ua)) ar.href = `intent://arvr.google.com/scene-viewer/1.2?file=${encodeURIComponent(rel('models/server.glb'))}&mode=ar_preferred&title=2U%20Server#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(location.href)};end;`;
-else ar.style.display = 'none';
+// ---------- AR：WebXR（Quest / 安卓 Chrome）＋ Scene Viewer / Quick Look 後備 ----------
+const ua = navigator.userAgent;
+const isIOS = /iP(hone|ad|od)/.test(ua) || (ua.includes('Mac') && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/.test(ua);
+const arBtn = $('#btnAR');
+const ar = { session: null, hitSource: null, placed: false, placing: true, resumeCam: false, refType: 'local-floor' };
+state.xrAR = false;
+
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _s1 = new THREE.Vector3();
+const xrRay = new THREE.Raycaster();
+
+const reticle = new THREE.Group();
+reticle.add(new THREE.Mesh(
+  new THREE.RingGeometry(0.045, 0.062, 48).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0x3aa0ff, transparent: true, opacity: 0.95, side: THREE.DoubleSide }),
+));
+reticle.add(new THREE.Mesh(
+  new THREE.CircleGeometry(0.045, 48).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0x3aa0ff, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
+));
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
+
+function setARHint(msg) { const el = $('#arHint'); if (el) el.textContent = msg; }
+
+function sceneViewerIntent() {
+  const file = rel('models/server.glb');
+  const fallback = location.href;
+  return `intent://arvr.google.com/scene-viewer/1.0?file=${encodeURIComponent(file)}&mode=ar_preferred&title=${encodeURIComponent('2U 伺服器')}#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(fallback)};end;`;
+}
+
+function bindXRControllers() {
+  for (let i = 0; i < 2; i++) {
+    const c = renderer.xr.getController(i);
+    c.addEventListener('select', onXRSelect);
+    scene.add(c);
+  }
+}
+bindXRControllers();
+
+function onXRSelect(ev) {
+  if (!renderer.xr.isPresenting) return;
+  if (ar.placing) {
+    if (reticle.visible) placeAtMatrix(reticle.matrix);
+    else placeInFront();
+    return;
+  }
+  const ctrl = ev.target;
+  xrRay.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
+  xrRay.ray.direction.set(0, 0, -1).transformDirection(ctrl.matrixWorld);
+  const hits = modelRoot ? xrRay.intersectObject(modelRoot, true) : [];
+  if (hits.length) setTarget(state.target ? 0 : 1);
+}
+
+function placeAtMatrix(matrix) {
+  matrix.decompose(_v1, _q1, _s1);
+  pivot.position.copy(_v1);
+  pivot.quaternion.copy(_q1);
+  pivot.scale.set(1, 1, 1);
+  pivot.visible = true;
+  ar.placed = true;
+  ar.placing = false;
+  reticle.visible = false;
+  setARHint('點模型或按「展開」可分層查看，按「移動」可重新放置');
+}
+
+function placeInFront() {
+  const xrCam = renderer.xr.getCamera();
+  xrCam.getWorldPosition(_v1);
+  xrCam.getWorldDirection(_v2);
+  const p = _v1.clone().addScaledVector(_v2, 1.0);
+  if (ar.refType === 'local-floor') p.y = 0;
+  else p.y = _v1.y - 1.15;
+  pivot.position.copy(p);
+  pivot.quaternion.identity();
+  const yaw = Math.atan2(_v1.x - p.x, _v1.z - p.z);
+  pivot.rotation.set(0, yaw, 0);
+  pivot.scale.set(1, 1, 1);
+  pivot.visible = true;
+  ar.placed = true;
+  ar.placing = false;
+  reticle.visible = false;
+  setARHint('點模型或按「展開」可分層查看，按「移動」可重新放置');
+}
+
+function startPlacing() {
+  ar.placing = true;
+  ar.placed = false;
+  pivot.visible = false;
+  reticle.visible = false;
+  setARHint('對準桌面或地面，點一下或捏合即可放置');
+}
+
+function applyARLayout() {
+  const s = modelWidth1 > 0 ? AR_WIDTH / modelWidth1 : 1;
+  layoutModel(s);
+  pivot.position.set(0, 0, 0);
+  pivot.quaternion.identity();
+  pivot.rotation.set(0, 0, 0);
+  pivot.scale.set(1, 1, 1);
+  shadow.visible = false;
+  startPlacing();
+}
+
+function restorePreviewLayout() {
+  layoutModel(S);
+  pivot.position.set(0, 0, 0);
+  pivot.quaternion.identity();
+  pivot.rotation.set(0, state.yaw, 0);
+  pivot.scale.set(1, 1, 1);
+  pivot.visible = true;
+  shadow.visible = true;
+  reticle.visible = false;
+}
+
+function updateAR(xrFrame) {
+  if (!xrFrame || !ar.hitSource || !ar.placing) return;
+  const ref = renderer.xr.getReferenceSpace();
+  if (!ref) return;
+  const hits = xrFrame.getHitTestResults(ar.hitSource);
+  if (hits.length) {
+    const pose = hits[0].getPose(ref);
+    if (pose) {
+      reticle.visible = true;
+      reticle.matrix.fromArray(pose.transform.matrix);
+    } else reticle.visible = false;
+  } else reticle.visible = false;
+}
+
+async function setupHitTest(session) {
+  ar.hitSource = null;
+  try {
+    if (!session.requestHitTestSource) return;
+    const viewerSpace = await session.requestReferenceSpace('viewer');
+    ar.hitSource = await session.requestHitTestSource({ space: viewerSpace });
+  } catch (e) { console.warn('hit-test 無法使用', e); }
+}
+
+async function startAR() {
+  if (!navigator.xr?.requestSession) { toast('此瀏覽器不支援 WebXR AR'); return; }
+  if (!state.modelReady) { toast('模型還在載入，請稍候再試'); return; }
+  if (ar.session) return;
+  ar.resumeCam = state.camOn;
+  if (state.camOn) stopCamera();
+  $('#intro').classList.add('hide');
+  const overlay = $('#arOverlay');
+  overlay.style.display = 'block';
+  const sessionInit = {
+    optionalFeatures: ['hit-test', 'dom-overlay', 'local-floor', 'hand-tracking'],
+    domOverlay: { root: overlay },
+  };
+  let session;
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+  } catch (e) {
+    overlay.style.display = 'none';
+    if (ar.resumeCam) enableGestures();
+    ar.resumeCam = false;
+    toast('無法開啟 AR：' + (e.message || e.name) + '。請允許相機與空間權限後再試');
+    return;
+  }
+  const feats = session.enabledFeatures;
+  const hasFloor = feats && (typeof feats.has === 'function' ? feats.has('local-floor') : Array.from(feats).includes('local-floor'));
+  ar.refType = hasFloor || !feats ? 'local-floor' : 'local';
+  try {
+    renderer.xr.setReferenceSpaceType(ar.refType);
+    await renderer.xr.setSession(session);
+  } catch (e) {
+    try {
+      ar.refType = 'local';
+      renderer.xr.setReferenceSpaceType('local');
+      await renderer.xr.setSession(session);
+    } catch (e2) {
+      overlay.style.display = 'none';
+      try { session.end(); } catch {}
+      if (ar.resumeCam) enableGestures();
+      ar.resumeCam = false;
+      toast('無法啟動 AR 工作階段：' + (e2.message || e2.name));
+      return;
+    }
+  }
+  ar.session = session;
+  session.addEventListener('end', onAREnded);
+  document.body.classList.add('ar');
+  applyARLayout();
+  await setupHitTest(session);
+}
+
+function onAREnded() {
+  if (ar.hitSource?.cancel) try { ar.hitSource.cancel(); } catch {}
+  ar.hitSource = null;
+  ar.session = null;
+  ar.placing = false;
+  ar.placed = false;
+  document.body.classList.remove('ar');
+  const overlay = $('#arOverlay'); if (overlay) overlay.style.display = 'none';
+  restorePreviewLayout();
+  resize();
+  if (ar.resumeCam) enableGestures();
+  ar.resumeCam = false;
+}
+
+async function toggleAR(ev) {
+  ev?.preventDefault();
+  if (ar.session) { try { await ar.session.end(); } catch {} return; }
+  await startAR();
+}
+
+$('#btnARExit')?.addEventListener('click', (e) => { e.preventDefault(); if (ar.session) ar.session.end(); });
+$('#btnARPlace')?.addEventListener('click', (e) => { e.preventDefault(); if (renderer.xr.isPresenting) startPlacing(); });
+$('#btnARToggle')?.addEventListener('click', (e) => { e.preventDefault(); setTarget(state.target ? 0 : 1); });
+
+async function initARButton() {
+  let xrOK = false;
+  if (navigator.xr?.isSessionSupported) {
+    try { xrOK = await navigator.xr.isSessionSupported('immersive-ar'); } catch {}
+  }
+  state.xrAR = !!xrOK;
+  arBtn.classList.remove('disabled');
+  if (xrOK) {
+    arBtn.removeAttribute('rel');
+    arBtn.href = '#';
+    arBtn.setAttribute('role', 'button');
+    arBtn.onclick = toggleAR;
+    arBtn.title = '進入 AR，把伺服器放到真實桌上';
+    return;
+  }
+  if (isIOS) {
+    arBtn.href = rel('models/server_anim.usdz');
+    arBtn.rel = 'ar';
+    arBtn.innerHTML = '<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">AR';
+    arBtn.onclick = null;
+    arBtn.title = '用 iPhone Quick Look 開啟 AR';
+    return;
+  }
+  if (isAndroid) {
+    arBtn.href = sceneViewerIntent();
+    arBtn.removeAttribute('rel');
+    arBtn.onclick = null;
+    arBtn.title = '用 Google Scene Viewer 開啟 AR';
+    return;
+  }
+  arBtn.href = '#';
+  arBtn.classList.add('disabled');
+  arBtn.title = '此裝置不支援 AR';
+  arBtn.onclick = (e) => { e.preventDefault(); toast('請用支援 AR 的安卓手機、iPhone 或 Meta Quest 開啟此頁'); };
+}
+initARButton();
 
 // ---------- 相機 + MediaPipe ----------
 let landmarker = null, video = $('#video'), lastVideoTime = -1, lastDetect = 0;
@@ -217,6 +489,7 @@ function classify(lm) {
 state.classify = (lm) => classify(lm).g;
 let stable = { g: 'none', n: 0 }, prevPalm = null, pinchRef = null;
 function detect(now) {
+  if (ar.session || renderer.xr.isPresenting) return; // AR 進行中暫停手勢相機推論
   if (!landmarker || video.readyState < 2 || now - lastDetect < 33) return;
   if (video.currentTime === lastVideoTime) return; lastVideoTime = video.currentTime; lastDetect = now;
   let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { console.warn(e); return; }
@@ -255,7 +528,7 @@ function drawHand(lm) {
 let toastT; function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 4500); }
 
 // 啟動
-loadModel().then(() => { $('#loading').classList.add('hide'); state.modelReady = true; requestAnimationFrame(frame); })
+loadModel().then(() => { $('#loading').classList.add('hide'); state.modelReady = true; renderer.setAnimationLoop(frame); })
   .catch((e) => { console.error(e); $('#loadtxt').textContent = '模型載入失敗：' + e.message; });
 // 測試用：?auto=cam / ?auto=touch 直接跳過開始畫面
 const auto = new URLSearchParams(location.search).get('auto');
