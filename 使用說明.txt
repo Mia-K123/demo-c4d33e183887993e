@@ -1,0 +1,39 @@
+2U 伺服器 · 手勢 3D 展示（完全離線，不連任何外部網站）
+
+【電腦上看】
+1. 解壓縮整個資料夾
+2. 在資料夾裡開 PowerShell，執行： python serve.py 8765
+3. 瀏覽器開 http://localhost:8765 → 按「開啟相機，用手勢玩」
+   （直接點兩下 index.html 不行，相機和模型都需要經過 serve.py）
+
+【手機上看】
+手機瀏覽器只有在 HTTPS 下才准開相機，所以要把整個資料夾放到 HTTPS 網址上，例如：
+- GitHub Pages：把資料夾內容上傳到一個 repo，Settings → Pages 開啟，網址像 https://帳號.github.io/repo名稱/
+- 公司有 HTTPS 的內網伺服器
+所有路徑都是相對路徑，放在子資料夾也能用。
+只要觸控（不用手勢）的話，用 http://電腦IP:8765 也可以看，但相機會被擋。
+
+【手勢】
+🖐️ 張開手掌 → 零件分層展開（附中文標籤）
+✊ 握拳 → 收合
+🤏 只伸拇指＋食指 → 兩指距離控制縮放
+👋 手左右／上下移動 → 旋轉模型
+右上 ⇄ 切換前／後鏡頭（預設前鏡頭）
+
+【沒有相機時】
+單指拖曳旋轉、雙指縮放、點兩下展開／收合，或按下方「展開／收合」「重置」
+電腦鍵盤：空白鍵或 E 切換、O 展開、C 收合、方向鍵旋轉、+ / - 縮放
+
+【AR】
+iPhone 右上「AR」→ 開啟 models/server_anim.usdz，放到桌上會自動循環「展開→收合」動畫
+Android 右上「AR」→ Google Scene Viewer（靜態模型，需 HTTPS 網址）
+
+【檔案】
+index.html / app.js       網頁本體（app.js 已內含 Three.js 與 MediaPipe）
+libs/mediapipe/wasm/      手勢辨識引擎
+models/hand_landmarker.task  手部偵測模型
+models/server.glb         伺服器模型（41 個零件分開）
+models/server_anim.usdz   iPhone AR 動畫版
+models/parts.json         每個零件的展開方向與中文名稱
+env/                      攝影棚環境光
+src/、build/              原始碼與 Blender 產生模型的腳本（修改用，展示不需要）
