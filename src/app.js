@@ -153,56 +153,215 @@ function frame(now, xrFrame) {
     updateLabels();
     if (state.camOn) detect(now);
   }
+  if (snapArmed && state.target === 0 && state.explode <= SNAP_AT) {
+    snapArmed = false;
+    playCollapseImpact();
+  }
+  if (punch > 0) { punch = Math.max(0, punch - dt * 5.5); if (punch < 0.03) punch = 0; state.punch = punch; }
+  tickIntroLoop();
+  applyPunch(now);
   renderer.render(scene, camera);
 }
 
 
-// ---------- 展開配樂（Web Audio gain 淡入淡出，WebXR 中不依賴 window rAF） ----------
+
+// ---------- 音效（前奏輕聲循環；第一次展開跳到副歌高潮；收合有撞擊音效） ----------
+// 分析：50 ms RMS（全頻 + 300–3400 Hz 人聲帶）+ 128 BPM 拍點網格（前奏 onset ACF）。
+// 前奏 0.00–28.12s = 15 小節器樂；約 29.1s 起較安靜的主歌（人聲帶相對凸顯）；
+// 45.00s = 第 24 小節，全頻能量躍升約 +8 dB，副歌/高潮（人聲與編曲一起進來）。
 const SOUND_KEY = 'gesture-demo-sound';
-const music = new Audio(rel('audio/explode.mp3'));
-music.loop = true;
-music.preload = 'auto';
-music.playsInline = true;
-music.setAttribute('playsinline', '');
-music.crossOrigin = 'anonymous';
-const snd = { ctx: null, gain: null, unlocked: false, pauseT: 0, level: 0 };
+const INTRO_START = 0.00, INTRO_END = 28.12, CLIMAX = 45.00;
+const INTRO_GAIN = 0.4, MAIN_GAIN = 1.0, SNAP_AT = 0.08;
+const KEY0 = 1.6, RIM0 = 1.2;
+
+function makeAudioEl() {
+  const a = new Audio(rel('audio/explode.mp3'));
+  a.preload = 'auto'; a.playsInline = true; a.crossOrigin = 'anonymous';
+  a.setAttribute('playsinline', ''); a.loop = false;
+  return a;
+}
+const introEl = makeAudioEl(), mainEl = makeAudioEl();
+const snd = {
+  ctx: null, introGain: null, mainGain: null, noise: null,
+  unlocked: false, mode: 'off', resumePos: CLIMAX, mainEnded: false,
+  pauseT: 0, sfx: { whooshAt: 0, impactAt: 0 },
+};
+let snapArmed = false, punch = 0, ignoreGesturesUntil = 0;
 state.soundOn = localStorage.getItem(SOUND_KEY) !== '0';
-state.music = music;
+state.music = mainEl; // 測試相容
+state.intro = introEl;
 state.sound = snd;
+state.punch = 0;
 
 function ensureAudio() {
   if (snd.ctx) return;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   snd.ctx = new AC();
-  const src = snd.ctx.createMediaElementSource(music);
-  snd.gain = snd.ctx.createGain();
-  snd.gain.gain.value = 0;
-  src.connect(snd.gain).connect(snd.ctx.destination);
-  music.volume = 1;
+  const hook = (el, name) => {
+    const g = snd.ctx.createGain(); g.gain.value = 0;
+    snd.ctx.createMediaElementSource(el).connect(g).connect(snd.ctx.destination);
+    snd[name] = g;
+  };
+  hook(introEl, 'introGain'); hook(mainEl, 'mainGain');
 }
 
-function fadeGain(to, dur) {
-  snd.level = to;
-  if (!snd.gain || !snd.ctx) {
-    music.volume = to;
-    return;
-  }
-  const now = snd.ctx.currentTime;
-  const g = snd.gain.gain;
-  let from = 0;
-  try { from = g.value; } catch {}
+function fadeNode(node, to, dur) {
+  if (!node || !snd.ctx) return;
+  const now = snd.ctx.currentTime, g = node.gain;
+  let from = 0; try { from = g.value; } catch {}
   g.cancelScheduledValues(now);
   g.setValueAtTime(Number.isFinite(from) ? from : 0, now);
-  g.linearRampToValueAtTime(to, now + Math.max(0.01, dur));
+  g.linearRampToValueAtTime(to, now + Math.max(0.02, dur));
+}
+
+function noiseBuffer() {
+  if (snd.noise) return snd.noise;
+  if (!snd.ctx) return null;
+  const sr = snd.ctx.sampleRate, n = Math.floor(sr * 1.2);
+  const buf = snd.ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  snd.noise = buf; return buf;
+}
+
+async function silentPrime(el) {
+  el.muted = true;
+  try { await el.play(); } catch {}
+  el.pause();
+  el.muted = false;
+  try { el.currentTime = 0; } catch {}
+}
+
+function tickIntroLoop() {
+  if (snd.mode !== 'intro' || introEl.paused) return;
+  if (introEl.currentTime >= INTRO_END - 0.05) {
+    try { introEl.currentTime = INTRO_START; } catch {}
+  }
+}
+
+function startIntroLoop() {
+  if (!state.soundOn || !snd.unlocked) return;
+  clearTimeout(snd.pauseT);
+  if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
+  try { if (introEl.currentTime < INTRO_START || introEl.currentTime >= INTRO_END - 0.08) introEl.currentTime = INTRO_START; } catch {}
+  introEl.play().catch(() => {});
+  fadeNode(snd.introGain, INTRO_GAIN, 0.5);
+  fadeNode(snd.mainGain, 0, 0.35);
+  snd.mode = 'intro';
+  snd.pauseT = setTimeout(() => { if (snd.mode === 'intro') mainEl.pause(); }, 400);
+}
+
+function startMainAt(t) {
+  if (!state.soundOn || !snd.unlocked) return;
+  clearTimeout(snd.pauseT);
+  if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
+  const dur = mainEl.duration;
+  let pos = t;
+  if (!Number.isFinite(pos) || pos < 0) pos = CLIMAX;
+  if (Number.isFinite(dur) && dur > 0 && pos > dur - 0.8) pos = CLIMAX;
+  try { mainEl.currentTime = pos; } catch {}
+  mainEl.play().catch(() => {});
+  fadeNode(snd.mainGain, MAIN_GAIN, 0.45);
+  fadeNode(snd.introGain, 0, 0.45);
+  snd.mode = 'main';
+  snd.mainEnded = false;
+  snd.pauseT = setTimeout(() => { if (snd.mode === 'main') introEl.pause(); }, 500);
+}
+
+function onExplodeAudio() {
+  snapArmed = false;
+  if (!state.soundOn || !snd.unlocked) return;
+  let pos = snd.resumePos;
+  if (snd.mainEnded || !Number.isFinite(pos)) pos = CLIMAX;
+  startMainAt(pos);
+}
+
+function onCollapseAudio() {
+  snapArmed = state.explode > SNAP_AT;
+  snd.resumePos = (!mainEl.paused || snd.mode === 'main') ? mainEl.currentTime : snd.resumePos;
+  if (snd.mode === 'main') snd.resumePos = mainEl.currentTime;
+  fadeNode(snd.mainGain, 0, 0.4);
+  fadeNode(snd.introGain, 0, 0.25);
+  clearTimeout(snd.pauseT);
+  snd.pauseT = setTimeout(() => { mainEl.pause(); if (state.target) return; }, 420);
+  if (state.soundOn && snd.unlocked) {
+    if (snapArmed) startCollapseWhoosh();
+    else playCollapseImpact();
+    // 撞擊之後再把前奏輕聲接回來，避免蓋過收合音效
+    setTimeout(() => { if (!state.target && state.soundOn) startIntroLoop(); }, snapArmed ? 950 : 350);
+  } else {
+    snd.mode = 'off';
+  }
+}
+
+function startCollapseWhoosh() {
+  if (!state.soundOn || !snd.unlocked || !snd.ctx) return;
+  const ctx = snd.ctx, now = ctx.currentTime, buf = noiseBuffer();
+  if (!buf) return;
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.85;
+  bp.frequency.setValueAtTime(2000, now);
+  bp.frequency.exponentialRampToValueAtTime(240, now + 0.45);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.7, now + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.18, now + 0.28);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.52);
+  src.connect(bp).connect(g).connect(ctx.destination);
+  src.start(now); src.stop(now + 0.54);
+  snd.sfx.whooshAt = performance.now();
+}
+
+function playCollapseImpact() {
+  if (!state.soundOn || !snd.unlocked || !snd.ctx) return;
+  const ctx = snd.ctx, now = ctx.currentTime, dest = ctx.destination;
+  const thud = ctx.createOscillator(); thud.type = 'sine';
+  thud.frequency.setValueAtTime(150, now);
+  thud.frequency.exponentialRampToValueAtTime(38, now + 0.2);
+  const tg = ctx.createGain();
+  tg.gain.setValueAtTime(1.25, now);
+  tg.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+  thud.connect(tg).connect(dest);
+  const click = ctx.createOscillator(); click.type = 'triangle';
+  click.frequency.setValueAtTime(480, now);
+  click.frequency.exponentialRampToValueAtTime(160, now + 0.07);
+  const cg = ctx.createGain();
+  cg.gain.setValueAtTime(0.4, now);
+  cg.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+  click.connect(cg).connect(dest);
+  const buf = noiseBuffer();
+  if (buf) {
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1100, now);
+    lp.frequency.exponentialRampToValueAtTime(160, now + 0.12);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.8, now);
+    ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    src.connect(lp).connect(ng).connect(dest);
+    src.start(now); src.stop(now + 0.18);
+  }
+  thud.start(now); thud.stop(now + 0.34);
+  click.start(now); click.stop(now + 0.1);
+  snd.sfx.impactAt = performance.now();
+  punch = 1; state.punch = 1;
+}
+
+function applyPunch(now) {
+  const p = punch * punch;
+  rim.intensity = RIM0 + p * 3.4;
+  key.intensity = KEY0 + p * 1.2;
+  if (p > 0 && !renderer.xr.isPresenting) {
+    camera.position.x += Math.sin(now * 0.058) * 0.05 * p;
+    camera.position.y += Math.sin(now * 0.081) * 0.028 * p;
+  }
 }
 
 function updateSoundBtn() {
   const label = !snd.unlocked ? '🔊 開啟音效' : (state.soundOn ? '🔊 音效開' : '🔇 音效關');
   for (const id of ['#btnSound', '#btnARSound']) {
     const el = $(id); if (!el) continue;
-    el.textContent = label;
-    el.title = label;
+    el.textContent = label; el.title = label;
     el.setAttribute('aria-pressed', (state.soundOn && snd.unlocked) ? 'true' : 'false');
     el.classList.toggle('off', !!(snd.unlocked && !state.soundOn));
   }
@@ -212,36 +371,22 @@ async function unlockAudio() {
   try {
     ensureAudio();
     if (snd.ctx && snd.ctx.state !== 'running') await snd.ctx.resume();
-    const playP = music.play();
-    if (playP) await playP;
-    if (!(state.soundOn && state.target)) music.pause();
+    fadeNode(snd.introGain, 0, 0.01);
+    fadeNode(snd.mainGain, 0, 0.01);
+    await Promise.all([silentPrime(introEl), silentPrime(mainEl)]);
     snd.unlocked = true;
     state.audioUnlocked = true;
     updateSoundBtn();
-    if (state.soundOn && state.target) startMusic();
+    // 解鎖後若尚未展開：只輕聲循環前奏，絕不跳到高潮
+    if (state.soundOn && !state.target) startIntroLoop();
+    else if (state.soundOn && state.target) onExplodeAudio();
   } catch (e) {
     console.warn('音效尚未解鎖', e);
   }
 }
 
-function startMusic() {
-  if (!state.soundOn || !snd.unlocked) return;
-  clearTimeout(snd.pauseT);
-  if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
-  const p = music.play();
-  if (p) p.catch(() => {});
-  fadeGain(1, 0.6);
-}
-
-function stopMusic() {
-  clearTimeout(snd.pauseT);
-  fadeGain(0, 0.8);
-  snd.pauseT = setTimeout(() => { if (!state.target) music.pause(); }, 850);
-}
-
 function toggleSound(ev) {
-  ev?.preventDefault();
-  ev?.stopPropagation();
+  ev?.preventDefault(); ev?.stopPropagation();
   if (!snd.unlocked) {
     state.soundOn = true;
     localStorage.setItem(SOUND_KEY, '1');
@@ -252,14 +397,17 @@ function toggleSound(ev) {
   state.soundOn = !state.soundOn;
   localStorage.setItem(SOUND_KEY, state.soundOn ? '1' : '0');
   updateSoundBtn();
-  if (state.soundOn && state.target) startMusic();
-  else {
-    fadeGain(0, 0.25);
+  if (state.soundOn) {
+    if (state.target) onExplodeAudio(); else startIntroLoop();
+  } else {
+    fadeNode(snd.introGain, 0, 0.2);
+    fadeNode(snd.mainGain, 0, 0.2);
     clearTimeout(snd.pauseT);
-    snd.pauseT = setTimeout(() => { if (!state.soundOn || !state.target) music.pause(); }, 280);
+    snd.pauseT = setTimeout(() => { introEl.pause(); mainEl.pause(); snd.mode = 'off'; }, 250);
   }
 }
 
+mainEl.addEventListener('ended', () => { snd.mainEnded = true; snd.resumePos = CLIMAX; });
 updateSoundBtn();
 document.addEventListener('pointerdown', (e) => {
   if (e.target?.closest?.('#btnSound, #btnARSound')) return;
@@ -276,7 +424,7 @@ function setTarget(v) {
   const label = v ? '收合' : '展開';
   $('#btnToggle').textContent = label; $('#btnToggle').classList.toggle('on', !!v);
   const b = $('#btnARToggle'); if (b) { b.textContent = label; b.classList.toggle('on', !!v); }
-  if (changed) { if (v) startMusic(); else stopMusic(); }
+  if (changed) { if (v) onExplodeAudio(); else onCollapseAudio(); }
 }
 $('#btnToggle').onclick = () => setTarget(state.target ? 0 : 1);
 $('#btnReset').onclick = () => { state.tYaw = YAW0; state.tPitch = PITCH0; state.tZoom = 1; setTarget(0); };
@@ -284,7 +432,7 @@ $('#btnHelp').onclick = () => $('#help').classList.toggle('show');
 $('#help').onclick = () => $('#help').classList.remove('show');
 const clampP = (p) => Math.max(-0.15, Math.min(1.35, p));
 const clampZ = (z) => Math.max(0.55, Math.min(2.6, z));
-const ptrs = new Map(); let pinch0 = 0, zoom0 = 1, lastTap = 0, moved = false;
+const ptrs = new Map(); let pinch0 = 0, zoom0 = 1, lastTap = -1e9, moved = false;
 canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); moved = false;
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a[0] - b[0], a[1] - b[1]); zoom0 = state.tZoom; } });
 canvas.addEventListener('pointermove', (e) => {
@@ -577,7 +725,10 @@ async function startCamera() {
   video.srcObject = state.stream; await video.play();
   video.classList.toggle('mirror', state.facing === 'user'); document.body.classList.add('cam');
   state.camOn = true; lastVideoTime = -1;
+  ignoreGesturesUntil = performance.now() + 800;
+  stable = { g: 'none', n: 0 };
 }
+
 function stopCamera() { state.stream?.getTracks().forEach((t) => t.stop()); state.stream = null; state.camOn = false; document.body.classList.remove('cam'); }
 
 async function enableGestures() {
@@ -617,6 +768,7 @@ function detect(now) {
   const c = classify(lm);
   stable = c.g === stable.g ? { g: c.g, n: stable.n + 1 } : { g: c.g, n: 1 };
   const g = stable.n >= 3 ? stable.g : state.gesture;
+  if (now < ignoreGesturesUntil) { prevPalm = palm; setStatus(c.g); return; }
   if (g === 'open') setTarget(1); else if (g === 'fist') setTarget(0);
   if (g === 'pinch') { // 拇指–食指距離 → 縮放（相對於開始捏的那一刻）
     if (!pinchRef) pinchRef = { d: Math.max(0.15, c.pinchD), z: state.tZoom };
