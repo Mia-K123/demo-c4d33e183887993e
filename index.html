@@ -59,6 +59,8 @@
     border: 1px solid var(--line); font-size: 14px; opacity: 0; transition: .25s; pointer-events: none; z-index: 6; }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+  #btnSound, #btnARSound { font-size: 13px; font-weight: 700; width: auto; padding: 0 10px; white-space: nowrap; }
+  #btnSound.off, #btnARSound.off { opacity: .65; }
   #btnAR.disabled { opacity: .45; }
   #arOverlay { display: none; position: fixed; inset: 0; pointer-events: none; z-index: 20; }
   #arOverlay .ar-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 14px calc(env(safe-area-inset-bottom) + 14px);
@@ -78,6 +80,7 @@
 <div id="labels"></div>
 <header>
   <div class="title"><h1>2U 機架式伺服器</h1><p>手勢互動 3D 爆炸圖展示</p></div>
+  <button id="btnSound" class="iconbtn" type="button" title="開啟音效">🔊 開啟音效</button>
   <a id="btnAR" class="iconbtn" title="AR">AR</a>
   <button id="btnFlip" class="iconbtn" title="切換前／後鏡頭" hidden>⇄</button>
   <button id="btnHelp" class="iconbtn" title="操作說明">?</button>
@@ -93,7 +96,7 @@
     <tr><td>👋</td><td><b>手左右／上下移動</b>：旋轉模型</td></tr>
     <tr><td>👆</td><td><b>沒有相機時</b>：單指拖曳旋轉、雙指縮放、點兩下展開／收合</td></tr>
   </table>
-  <div class="sub">手離鏡頭約 40–70 公分、光線充足時最準。相機畫面只在你的手機上處理，不會上傳。<br>右上「AR」：Quest 與安卓可把伺服器放到真實桌上；iPhone 會開啟 Quick Look。</div>
+  <div class="sub">手離鏡頭約 40–70 公分、光線充足時最準。相機畫面只在你的手機上處理，不會上傳。<br>右上「AR」：Quest 與安卓可把伺服器放到真實桌上；iPhone 會開啟 Quick Look。展開時會播放背景音樂，可按「🔊 開啟音效」解鎖或開關。</div>
 </div>
 <footer>
   <button id="btnReset" class="btn small">重置</button>
@@ -115,6 +118,7 @@
   <div class="ar-bar">
     <p id="arHint">對準桌面或地面，點一下或捏合即可放置</p>
     <div class="ar-actions">
+      <button id="btnARSound" class="btn small" type="button" style="width:auto;padding:0 12px;flex:0 0 auto">🔊 開啟音效</button>
       <button id="btnARPlace" class="btn small" type="button">移動</button>
       <button id="btnARToggle" class="btn primary" type="button">展開</button>
       <button id="btnARExit" class="btn" type="button" style="flex:0 0 auto;width:auto;padding:0 16px">結束 AR</button>

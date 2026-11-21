@@ -32,6 +32,9 @@
 - 電腦瀏覽器：按鈕會提示改用手機或 Quest。
 Quest 第一次進入需允許瀏覽器的相機與空間（追蹤）權限，並在光線充足、有平面的房間使用。
 
+【音效】
+展開時會淡入播放背景音樂（循環），收合時淡出後暫停。右上「🔊 開啟音效」可解鎖／開關，選擇會記在這個瀏覽器；第一次點畫面也會解鎖。網頁 AR 同樣會播放；iPhone Quick Look 無法播放這段音樂。
+
 【檔案】
 index.html / app.js       網頁本體（app.js 已內含 Three.js 與 MediaPipe）
 libs/mediapipe/wasm/      手勢辨識引擎
@@ -39,5 +42,6 @@ models/hand_landmarker.task  手部偵測模型
 models/server.glb         伺服器模型（41 個零件分開）
 models/server_anim.usdz   iPhone AR 動畫版
 models/parts.json         每個零件的展開方向與中文名稱
+audio/explode.mp3         展開時的背景音樂
 env/                      攝影棚環境光
 src/、build/              原始碼與 Blender 產生模型的腳本（修改用，展示不需要）

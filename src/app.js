@@ -156,12 +156,127 @@ function frame(now, xrFrame) {
   renderer.render(scene, camera);
 }
 
+
+// ---------- 展開配樂（Web Audio gain 淡入淡出，WebXR 中不依賴 window rAF） ----------
+const SOUND_KEY = 'gesture-demo-sound';
+const music = new Audio(rel('audio/explode.mp3'));
+music.loop = true;
+music.preload = 'auto';
+music.playsInline = true;
+music.setAttribute('playsinline', '');
+music.crossOrigin = 'anonymous';
+const snd = { ctx: null, gain: null, unlocked: false, pauseT: 0, level: 0 };
+state.soundOn = localStorage.getItem(SOUND_KEY) !== '0';
+state.music = music;
+state.sound = snd;
+
+function ensureAudio() {
+  if (snd.ctx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  snd.ctx = new AC();
+  const src = snd.ctx.createMediaElementSource(music);
+  snd.gain = snd.ctx.createGain();
+  snd.gain.gain.value = 0;
+  src.connect(snd.gain).connect(snd.ctx.destination);
+  music.volume = 1;
+}
+
+function fadeGain(to, dur) {
+  snd.level = to;
+  if (!snd.gain || !snd.ctx) {
+    music.volume = to;
+    return;
+  }
+  const now = snd.ctx.currentTime;
+  const g = snd.gain.gain;
+  let from = 0;
+  try { from = g.value; } catch {}
+  g.cancelScheduledValues(now);
+  g.setValueAtTime(Number.isFinite(from) ? from : 0, now);
+  g.linearRampToValueAtTime(to, now + Math.max(0.01, dur));
+}
+
+function updateSoundBtn() {
+  const label = !snd.unlocked ? '🔊 開啟音效' : (state.soundOn ? '🔊 音效開' : '🔇 音效關');
+  for (const id of ['#btnSound', '#btnARSound']) {
+    const el = $(id); if (!el) continue;
+    el.textContent = label;
+    el.title = label;
+    el.setAttribute('aria-pressed', (state.soundOn && snd.unlocked) ? 'true' : 'false');
+    el.classList.toggle('off', !!(snd.unlocked && !state.soundOn));
+  }
+}
+
+async function unlockAudio() {
+  try {
+    ensureAudio();
+    if (snd.ctx && snd.ctx.state !== 'running') await snd.ctx.resume();
+    const playP = music.play();
+    if (playP) await playP;
+    if (!(state.soundOn && state.target)) music.pause();
+    snd.unlocked = true;
+    state.audioUnlocked = true;
+    updateSoundBtn();
+    if (state.soundOn && state.target) startMusic();
+  } catch (e) {
+    console.warn('音效尚未解鎖', e);
+  }
+}
+
+function startMusic() {
+  if (!state.soundOn || !snd.unlocked) return;
+  clearTimeout(snd.pauseT);
+  if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
+  const p = music.play();
+  if (p) p.catch(() => {});
+  fadeGain(1, 0.6);
+}
+
+function stopMusic() {
+  clearTimeout(snd.pauseT);
+  fadeGain(0, 0.8);
+  snd.pauseT = setTimeout(() => { if (!state.target) music.pause(); }, 850);
+}
+
+function toggleSound(ev) {
+  ev?.preventDefault();
+  ev?.stopPropagation();
+  if (!snd.unlocked) {
+    state.soundOn = true;
+    localStorage.setItem(SOUND_KEY, '1');
+    updateSoundBtn();
+    unlockAudio();
+    return;
+  }
+  state.soundOn = !state.soundOn;
+  localStorage.setItem(SOUND_KEY, state.soundOn ? '1' : '0');
+  updateSoundBtn();
+  if (state.soundOn && state.target) startMusic();
+  else {
+    fadeGain(0, 0.25);
+    clearTimeout(snd.pauseT);
+    snd.pauseT = setTimeout(() => { if (!state.soundOn || !state.target) music.pause(); }, 280);
+  }
+}
+
+updateSoundBtn();
+document.addEventListener('pointerdown', (e) => {
+  if (e.target?.closest?.('#btnSound, #btnARSound')) return;
+  if (!snd.unlocked) unlockAudio();
+}, { capture: true });
+$('#btnSound')?.addEventListener('click', toggleSound);
+$('#btnARSound')?.addEventListener('click', toggleSound);
+
 // ---------- UI / 觸控 / 滑鼠 / 鍵盤 ----------
 function setTarget(v) {
+  v = v ? 1 : 0;
+  const changed = state.target !== v;
   state.target = v;
   const label = v ? '收合' : '展開';
   $('#btnToggle').textContent = label; $('#btnToggle').classList.toggle('on', !!v);
   const b = $('#btnARToggle'); if (b) { b.textContent = label; b.classList.toggle('on', !!v); }
+  if (changed) { if (v) startMusic(); else stopMusic(); }
 }
 $('#btnToggle').onclick = () => setTarget(state.target ? 0 : 1);
 $('#btnReset').onclick = () => { state.tYaw = YAW0; state.tPitch = PITCH0; state.tZoom = 1; setTarget(0); };
@@ -335,6 +450,7 @@ async function startAR() {
   if (ar.session) return;
   ar.resumeCam = state.camOn;
   if (state.camOn) stopCamera();
+  unlockAudio();
   $('#intro').classList.add('hide');
   const overlay = $('#arOverlay');
   overlay.style.display = 'block';
@@ -469,8 +585,8 @@ async function enableGestures() {
   catch (e) { console.warn(e); $('#loading').classList.add('hide'); toast('無法開啟相機：' + (e.message || e.name) + '。已切換成觸控模式'); setStatus('nocam'); }
 }
 $('#btnFlip').onclick = async () => { state.facing = state.facing === 'user' ? 'environment' : 'user'; try { await startCamera(); } catch (e) { toast('切換鏡頭失敗'); } };
-$('#startCam').onclick = () => { $('#intro').classList.add('hide'); enableGestures(); };
-$('#startTouch').onclick = () => { $('#intro').classList.add('hide'); setStatus('nocam'); };
+$('#startCam').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); enableGestures(); };
+$('#startTouch').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); setStatus('nocam'); };
 
 // 手勢判斷
 const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
