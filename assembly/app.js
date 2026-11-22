@@ -45141,6 +45141,132 @@ function anchorOnPart(obj, face = "top") {
   return { localPos: localPos.toArray(), localNormal: localNormal.toArray() };
 }
 
+// src/gestures.js
+var HOLD_MS = 500;
+var COOLDOWN_MS = 1200;
+var MIN_PALM = 0.085;
+var EDGE_MARGIN = 0.06;
+var MIN_SCORE = 0.55;
+var FINGERS = {
+  thumb: [1, 2, 3, 4],
+  index: [5, 6, 7, 8],
+  middle: [9, 10, 11, 12],
+  ring: [13, 14, 15, 16],
+  pinky: [17, 18, 19, 20]
+};
+var D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+function palmSize(lm) {
+  if (!lm || !lm[0] || !lm[9]) return 0;
+  const len = D(lm[0], lm[9]);
+  const wid = lm[5] && lm[17] ? D(lm[5], lm[17]) : 0;
+  return Math.max(len, wid * 1.1, 1e-4);
+}
+function vsub(a, b) {
+  return { x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) };
+}
+function vdot(a, b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+function vlen(a) {
+  return Math.hypot(a.x, a.y, a.z) || 1e-8;
+}
+function vcos(a, b) {
+  return vdot(a, b) / (vlen(a) * vlen(b));
+}
+function fingerExtended(lm, name, palm = palmSize(lm)) {
+  const idx = FINGERS[name];
+  if (!idx || !lm[idx[0]] || !lm[idx[3]]) return false;
+  const [mcp, pip, dip, tip] = idx.map((i) => lm[i]);
+  const wrist = lm[0];
+  const dirA = vsub(pip, mcp);
+  const dirB = vsub(tip, pip);
+  const straight = vcos(dirA, dirB);
+  const tipSpan = D(tip, wrist) / palm;
+  const pipSpan = D(pip, wrist) / palm;
+  const mcpSpan = D(mcp, wrist) / palm;
+  if (name === "thumb") {
+    const pinkyMcp = lm[17] || lm[5];
+    const abducted = D(tip, pinkyMcp) / palm;
+    return straight > 0.35 && abducted > 0.85;
+  }
+  return straight > 0.45 && tipSpan > pipSpan * 1.08 && tipSpan > mcpSpan * 1.15 && tipSpan > 1.05;
+}
+function assessQuality(lm, { score = 1 } = {}) {
+  if (!lm || lm.length < 21) return { ok: false, reason: "missing" };
+  if (score < MIN_SCORE) return { ok: false, reason: "score" };
+  const palm = palmSize(lm);
+  if (palm < MIN_PALM) return { ok: false, reason: "small" };
+  const keys = [0, 5, 9, 13, 17, 8, 12];
+  for (const i of keys) {
+    const p = lm[i];
+    if (!p) continue;
+    if (p.x < EDGE_MARGIN || p.x > 1 - EDGE_MARGIN || p.y < EDGE_MARGIN || p.y > 1 - EDGE_MARGIN) {
+      return { ok: false, reason: "edge" };
+    }
+  }
+  return { ok: true, reason: null, palm };
+}
+function classifyPose(lm, opts = {}) {
+  const q = assessQuality(lm, opts);
+  if (!q.ok) return { pose: null, quality: q, fingers: null };
+  const palm = q.palm;
+  const ext = {
+    thumb: fingerExtended(lm, "thumb", palm),
+    index: fingerExtended(lm, "index", palm),
+    middle: fingerExtended(lm, "middle", palm),
+    ring: fingerExtended(lm, "ring", palm),
+    pinky: fingerExtended(lm, "pinky", palm)
+  };
+  const four = [ext.index, ext.middle, ext.ring, ext.pinky];
+  const nFour = four.filter(Boolean).length;
+  let pose = null;
+  if (nFour >= 4 && ext.thumb) pose = "open";
+  else if (ext.index && ext.middle && !ext.ring && !ext.pinky) pose = "prev";
+  else if (ext.index && !ext.middle && !ext.ring && !ext.pinky) pose = "next";
+  return { pose, quality: q, fingers: ext };
+}
+var POSE_META = {
+  next: { label: "\u4E0B\u4E00\u6B65", icon: "\u261D\uFE0F", legend: "\u98DF\u6307\uFF1A\u4E0B\u4E00\u6B65" },
+  prev: { label: "\u4E0A\u4E00\u6B65", icon: "\u270C\uFE0F", legend: "\u98DF\u6307\uFF0B\u4E2D\u6307\uFF1A\u4E0A\u4E00\u6B65" },
+  open: { label: "\u91CD\u64AD", icon: "\u{1F590}\uFE0F", legend: "\u5F35\u958B\u624B\u638C\uFF1A\u91CD\u64AD" }
+};
+function createHoldTracker({ holdMs = HOLD_MS, cooldownMs = COOLDOWN_MS } = {}) {
+  let current = null, started = 0, coolUntil = 0, fired = false;
+  return {
+    update(now, pose) {
+      if (now < coolUntil) {
+        return { pose: null, progress: 0, firing: false, cooldown: true, remaining: coolUntil - now };
+      }
+      if (!pose) {
+        current = null;
+        started = 0;
+        fired = false;
+        return { pose: null, progress: 0, firing: false, cooldown: false };
+      }
+      if (pose !== current) {
+        current = pose;
+        started = now;
+        fired = false;
+      }
+      const progress = Math.min(1, (now - started) / holdMs);
+      if (progress >= 1 && !fired) {
+        fired = true;
+        coolUntil = now + cooldownMs;
+        const firedPose = current;
+        current = null;
+        return { pose: firedPose, progress: 1, firing: true, cooldown: true, remaining: cooldownMs };
+      }
+      return { pose: current, progress, firing: false, cooldown: false };
+    },
+    reset() {
+      current = null;
+      started = 0;
+      coolUntil = 0;
+      fired = false;
+    }
+  };
+}
+
 // src/app.js
 var $ = (s) => document.querySelector(s);
 var rel = (p) => new URL(p, document.baseURI).href;
@@ -45554,7 +45680,7 @@ function frame(now, xrFrame) {
     const mobile = innerWidth <= 900;
     const vis = visibleBand();
     const visFovV = Math.atan(Math.tan(fovV) * vis.frac);
-    const dist = focus.rad / Math.sin(Math.min(mobile ? visFovV : fovV, fovH)) * (mobile ? 0.72 : 0.92) / state.zoom;
+    const dist = focus.rad / Math.sin(Math.min(mobile ? visFovV : fovV, fovH)) * (mobile ? 0.88 : 0.92) / state.zoom;
     camera.position.set(0, focus.y + Math.sin(state.pitch) * dist, Math.cos(state.pitch) * dist);
     camera.lookAt(0, focus.y - focus.rad * (mobile ? 0.02 : 0.03), 0);
     if (mobile && vis.shift) camera.translateY(-vis.shift * dist * Math.tan(fovV));
@@ -46313,7 +46439,6 @@ var hctx = hud.getContext("2d");
 var landmarker = null;
 var lastVideoTime = -1;
 var lastDetect = 0;
-var ignoreUntil = 0;
 async function fetchWithProgress(url, onProg) {
   const res = await fetch(url);
   if (!res.ok) throw new Error("\u4E0B\u8F09\u5931\u6557 " + res.status);
@@ -46395,6 +46520,8 @@ async function enableGestures() {
 function stopGestures(updateBtn = true) {
   state.camOn = false;
   document.body.classList.remove("gestures");
+  holdTracker.reset();
+  hideHoldUI();
   if (state.stream) {
     for (const t of state.stream.getTracks()) t.stop();
     state.stream = null;
@@ -46412,20 +46539,30 @@ $("#btnGesture").onclick = () => {
   if (state.camOn) stopGestures();
   else enableGestures();
 };
-var D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-function classify(lm) {
-  const size = D(lm[0], lm[9]) || 1e-3;
-  const ext = [[8, 6], [12, 10], [16, 14], [20, 18]].map(([t, p]) => D(lm[t], lm[0]) > D(lm[p], lm[0]) * 1.12);
-  const nExt = ext.filter(Boolean).length;
-  const pinchD = D(lm[4], lm[8]) / size;
-  const thumbOut = D(lm[4], lm[17]) / size > 0.9;
-  if (nExt >= 4 && thumbOut && pinchD > 0.5) return "open";
-  const othersCurled = !ext[1] && !ext[2] && !ext[3];
-  if (othersCurled) return "fist";
-  return "move";
+var holdTracker = createHoldTracker({ holdMs: HOLD_MS, cooldownMs: COOLDOWN_MS });
+function handScore(res) {
+  const h = res?.handedness?.[0]?.[0] || res?.handednesses?.[0]?.[0];
+  return h && typeof h.score === "number" ? h.score : 1;
 }
-var stable = { g: "none", n: 0 };
-var palmHist = [];
+function hideHoldUI() {
+  const el = $("#gHold");
+  if (el) el.classList.remove("show");
+}
+function showHoldUI(pose, progress) {
+  const el = $("#gHold");
+  const ring = $("#gHoldRing");
+  const lab = $("#gHoldLabel");
+  if (!el || !ring) return;
+  const meta = POSE_META[pose];
+  if (!meta) {
+    el.classList.remove("show");
+    return;
+  }
+  el.classList.add("show");
+  lab.textContent = meta.label;
+  const pct = Math.max(0, Math.min(100, progress * 100));
+  ring.style.strokeDasharray = `${pct} 100`;
+}
 function detectHands(now) {
   if (ar.session || renderer.xr.isPresenting || scanStream) return;
   if (!landmarker || !video || video.readyState < 2 || now - lastDetect < 33) return;
@@ -46442,51 +46579,50 @@ function detectHands(now) {
   const lm = res.landmarks?.[0];
   drawHand(lm);
   if (!lm) {
-    stable = { g: "none", n: 0 };
-    palmHist.length = 0;
+    holdTracker.update(now, null);
+    hideHoldUI();
     setGStatus("none");
     return;
   }
-  const c = classify(lm);
-  stable = c === stable.g ? { g: c, n: stable.n + 1 } : { g: c, n: 1 };
-  const palmX = 1 - (lm[0].x + lm[5].x + lm[17].x) / 3;
-  palmHist.push({ t: now, x: palmX });
-  while (palmHist.length && now - palmHist[0].t > 420) palmHist.shift();
-  if (now < ignoreUntil) {
-    setGStatus(c);
+  const { pose, quality } = classifyPose(lm, { score: handScore(res) });
+  const hold = holdTracker.update(now, pose);
+  if (hold.firing) {
+    if (hold.pose === "next") next();
+    else if (hold.pose === "prev") prev();
+    else if (hold.pose === "open") replay();
+    showHoldUI(hold.pose, 1);
+    setGStatus(hold.pose === "open" ? "open" : hold.pose);
     return;
   }
-  if (palmHist.length >= 3) {
-    const dx = palmHist[palmHist.length - 1].x - palmHist[0].x;
-    if (Math.abs(dx) > 0.28) {
-      if (dx > 0) next();
-      else prev();
-      ignoreUntil = now + 850;
-      palmHist.length = 0;
-      setGStatus(dx > 0 ? "next" : "prev");
-      return;
-    }
-  }
-  if (stable.g === "open" && stable.n === 8) {
-    replay();
-    ignoreUntil = now + 1200;
-    setGStatus("open");
+  if (hold.cooldown) {
+    hideHoldUI();
+    setGStatus("wait");
     return;
   }
-  setGStatus(c);
+  if (hold.pose) {
+    showHoldUI(hold.pose, hold.progress);
+    setGStatus(hold.pose);
+    return;
+  }
+  hideHoldUI();
+  if (!quality.ok) setGStatus(quality.reason === "edge" ? "edge" : quality.reason === "small" ? "small" : quality.reason === "score" ? "score" : "none");
+  else setGStatus("ready");
 }
 var GEST = {
-  none: ["\u270B", "\u8ACB\u628A\u624B\u653E\u9032\u756B\u9762"],
-  open: ["\u{1F590}\uFE0F", "\u5F35\u958B\u624B\u638C\uFF1A\u91CD\u64AD\u6B64\u6B65\u52D5\u756B"],
-  fist: ["\u270A", "\u63E1\u62F3\uFF1A\u5C07\u624B\u5DE6\u53F3\u6ED1\u52D5\u5207\u63DB\u6B65\u9A5F"],
-  move: ["\u{1F44B}", "\u624B\u5411\u53F3\u6ED1\uFF1A\u4E0B\u4E00\u6B65\u3000\u5411\u5DE6\uFF1A\u4E0A\u4E00\u6B65"],
-  next: ["\u{1F449}", "\u4E0B\u4E00\u6B65"],
-  prev: ["\u{1F448}", "\u4E0A\u4E00\u6B65"]
+  none: ["\u270B", "\u8ACB\u628A\u624B\u653E\u9032\u756B\u9762\u4E2D\u592E"],
+  ready: ["\u270B", "\u6BD4\u51FA\u59FF\u52E2\u4E26\u7DAD\u6301\u7D04\u534A\u79D2"],
+  small: ["\u{1F90F}", "\u8ACB\u628A\u624B\u9760\u8FD1\u93E1\u982D"],
+  edge: ["\u2194\uFE0F", "\u8ACB\u628A\u624B\u653E\u5728\u756B\u9762\u4E2D\u592E"],
+  score: ["\u{1F440}", "\u770B\u4E0D\u6E05\u695A\uFF0C\u8ACB\u518D\u8209\u7A69\u4E00\u4E9B"],
+  wait: ["\u23F3", "\u7A0D\u5019\u518D\u6BD4\u4E0B\u4E00\u500B\u59FF\u52E2"],
+  open: ["\u{1F590}\uFE0F", "\u91CD\u64AD"],
+  next: ["\u261D\uFE0F", "\u4E0B\u4E00\u6B65"],
+  prev: ["\u270C\uFE0F", "\u4E0A\u4E00\u6B65"]
 };
 function setGStatus(g) {
   if (state.gesture === g) return;
   state.gesture = g;
-  const [i, t] = GEST[g] || GEST.move;
+  const [i, t] = GEST[g] || GEST.ready;
   $("#gico").textContent = i;
   $("#gtxt").textContent = t;
 }
@@ -46839,6 +46975,7 @@ Object.assign(state, {
   loadAnnotationsFromUrl,
   pickAtNdc,
   getAnnotations: () => state.annotations.slice(),
+  classifyPose,
   getVisibleAnnotationIds: () => [...annMeshes.keys()]
 });
 function bootFromUrlAndStore() {
