@@ -2077,7 +2077,8 @@ async function cacheTrackUrl(url, onDelta) {
 
 function resetTrackHud() {
   document.body.classList.remove('searching', 'found');
-  const intro = $('#trackIntro'); if (intro) intro.classList.remove('hide');
+  const intro = $('#trackIntro');
+  if (intro && !state.trackSim) intro.classList.remove('hide');
   const start = $('#trackStart'); if (start) { start.disabled = !trackAssets; start.textContent = '開啟相機'; }
   const name = $('#trackLabel .name'); if (name) name.textContent = '整機';
   const spec = $('#trackLabel .spec'); if (spec) spec.textContent = '2U 機架式伺服器（示例）';
@@ -2783,6 +2784,7 @@ async function ensureTrackVideoLive(session, timeout = 2500) {
 }
 
 function showTrackCameraPrompt() {
+  if (state.trackSim) return;
   document.body.classList.add('track-error');
   document.body.classList.remove('searching', 'found');
   $('#trackIntro')?.classList.remove('hide');
@@ -2795,7 +2797,7 @@ function clearTrackCameraPrompt() {
 }
 
 async function startTrackSession() {
-  if (trackBusy) return;
+  if (trackBusy || state.trackSim) return;
   const start = $('#trackStart');
   const txt = $('#trackLoadTxt');
   let watch = null;
@@ -2906,6 +2908,8 @@ async function enterTrackMode() {
   const tEnter = performance.now();
   await preloadTrack().catch(() => {});
   state.trackEnterToReadyMs = Math.round(performance.now() - tEnter);
+  // User may have already started 模擬卡片 while preload was still running.
+  if (state.trackSim || state.appMode !== 'track') return;
   const canAuto = !!(trackAssets && (state.camPermitted || state.trackCamAllowed) && !trackSession && !trackBusy);
   if (canAuto) {
     await startTrackSession();
@@ -2914,6 +2918,7 @@ async function enterTrackMode() {
       showTrackCameraPrompt();
     }
   } else {
+    if (state.trackSim) return;
     setTrackStatus('資源已預載。請按「開啟相機」以開啟後鏡頭（iPhone 需你親自點按一次）。');
     showTrackCameraPrompt();
     document.body.classList.remove('track-error'); // 正常提示，用 intro 大按鈕即可
@@ -3006,6 +3011,11 @@ state.startCardSimulate = startCardSimulate;
 state.stopCardSimulate = stopCardSimulate;
 state.setTrackItem = setTrackItem;
 state.setTrackHudOpen = setTrackHudOpen;
+state.projectTrackIcons = () => {
+  if (!arMenuHost?.projectIcons) return [];
+  const cam = (trackSession?._internal?.camera) || camera;
+  return arMenuHost.projectIcons(cam, innerWidth, innerHeight);
+};
 state.layoutTrackSim = layoutTrackSim;
 state.fpsMeter = fpsMeter;
 
