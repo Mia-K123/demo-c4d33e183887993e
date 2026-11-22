@@ -21,6 +21,7 @@ self.addEventListener('fetch', (event) => {
   try { url = new URL(req.url); } catch { return; }
   if (url.origin !== self.location.origin) return;
   if (url.pathname.includes('/assembly/')) return; // 子路徑頁面自行載入，避免根目錄 SW 干預
+  if (url.pathname.includes('/track/')) return; // 圖像追蹤模組自行載入，不納入手勢 Wasm 快取、也不改快取版本
   if (!HINT.test(url.pathname)) return;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);

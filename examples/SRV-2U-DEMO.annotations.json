@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "kind": "assembly-demo-annotations",
+  "deviceId": "SRV-2U-DEMO",
+  "deviceName": "2U 示範伺服器",
+  "exportedAt": "2026-11-22T01:24:09.966Z",
+  "annotations": [
+    {
+      "id": "ann_c76m8blv7o",
+      "deviceId": "SRV-2U-DEMO",
+      "stepId": "cpu",
+      "partName": "cpu-1",
+      "localPos": [
+        -3.725290298461914e-8,
+        0.028388351202011095,
+        -3.539025785273542e-8
+      ],
+      "localNormal": [
+        0,
+        1,
+        0
+      ],
+      "type": "ring",
+      "color": "#ffb020",
+      "text": "對準插座缺口"
+    },
+    {
+      "id": "ann_ee75hdlv8n",
+      "deviceId": "SRV-2U-DEMO",
+      "stepId": "cpu",
+      "partName": "cpu-2",
+      "localPos": [
+        5.587935454631765e-9,
+        0.028388351202011095,
+        -3.539025782497984e-8
+      ],
+      "localNormal": [
+        0,
+        1,
+        0
+      ],
+      "type": "arrow",
+      "color": "#ff4d4d",
+      "text": "對角鎖附（示例）"
+    },
+    {
+      "id": "ann_pojgp6lv8q",
+      "deviceId": "SRV-2U-DEMO",
+      "stepId": "cpu",
+      "partName": "board-1",
+      "localPos": [
+        0.19270083820510192,
+        0.002713195048272608,
+        -0.20302267104736832
+      ],
+      "localNormal": [
+        0.7648421872844884,
+        0,
+        -0.644217687237691
+      ],
+      "type": "text",
+      "color": "#3ee0c8",
+      "text": "I/O 擋板朝後"
+    }
+  ]
+}

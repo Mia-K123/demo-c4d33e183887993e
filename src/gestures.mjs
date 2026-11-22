@@ -1,20 +1,23 @@
-/** 純手勢狀態機：旋轉與開合分開，不含 DOM，可供單元測試。 */
+/** 四種固定手勢：張開＝展開、握拳＝收合、只伸食指左右移＝旋轉、捏合＝縮放。 */
 
-export const HOLD_S = 0.4;
-export const COOLDOWN_S = 1.0;
-export const ROT_LOCK_S = 0.5;
-export const STILL_SPEED = 0.22;          // 畫面正規化單位／秒，低於此視為靜止
-export const MOVE_SUPPRESS_SPEED = 0.42;  // 高於此暫停開／合判定
-export const ROT_DEADZONE = 0.0035;       // 每幀位移死區
+export const HOLD_S = 0.3;
+export const COOLDOWN_S = 0.8;
+export const VOTE_N = 6;
+export const VOTE_NEED = 4;
 export const YAW_GAIN = 5.5;
 export const PITCH_GAIN = 3.5;
-export const SPEED_SMOOTH = 0.08;
-export const CHARGE_GRACE_S = 0.1;
-export const POSE_ENTER = 3;
-export const POSE_EXIT = 4;
-export const INERTIA_DECAY = 5;           // 慣性指數衰減（1/秒）
+export const ROT_DEADZONE = 0.003;
+export const ROT_SMOOTH = 0.45;
+export const PINCH_MAX = 0.45;
+export const CURL_RATIO = 1.1;
 
 const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const FINGERS = [
+  { tip: 8, mcp: 5, pip: 6 },    // 食指
+  { tip: 12, mcp: 9, pip: 10 },  // 中指
+  { tip: 16, mcp: 13, pip: 14 }, // 無名
+  { tip: 20, mcp: 17, pip: 18 }, // 小指
+];
 
 export function palmCenter(lm) {
   return {
@@ -23,129 +26,94 @@ export function palmCenter(lm) {
   };
 }
 
-/** 前鏡頭／雙鏡頭：把座標對到鏡像預覽，手往畫面右邊移動時 x 增加。 */
 export function applyMirrorX(palm, { facing, camMode } = {}) {
   const mirrored = camMode === 'dual' || facing === 'user';
   if (!mirrored) return { x: palm.x, y: palm.y, mirrored: false };
   return { x: 1 - palm.x, y: palm.y, mirrored: true };
 }
 
+function isCurled(lm, f) {
+  return D(lm[f.tip], lm[0]) < D(lm[f.mcp], lm[0]) * CURL_RATIO;
+}
+function isExtended(lm, f) {
+  return D(lm[f.tip], lm[0]) > D(lm[f.pip], lm[0]) * 1.12
+    && D(lm[f.tip], lm[0]) > D(lm[f.mcp], lm[0]) * 1.15;
+}
+
 /**
- * 姿態分類。pinch 優先於 fist，避免捏合時被當成握拳。
- * prev 可做短暫滯後（由狀態機主責）。
+ * 優先順序：pinch > index > fist > palm。
+ * pinch：拇指與食指靠近（食指未捲進掌心，以免握拳被誤判）。
+ * index：只伸食指。
+ * fist：四指中至少三指捲曲（不理拇指）。
+ * palm：四指都伸直。
  */
-export function classifyPose(lm, prevPose = 'none') {
-  if (!lm || lm.length < 21) return { g: 'none', pinchD: 0, nExt: 0, thumbOut: false };
+export function classifyPose(lm) {
+  if (!lm || lm.length < 21) {
+    return { g: 'none', pinchD: 0, nExt: 0, nCurled: 0, curled: [], ext: [] };
+  }
   const size = D(lm[0], lm[9]) || 1e-3;
-  const ext = [[8, 6], [12, 10], [16, 14], [20, 18]].map(([t, p]) => D(lm[t], lm[0]) > D(lm[p], lm[0]) * 1.12);
+  const curled = FINGERS.map((f) => isCurled(lm, f));
+  const ext = FINGERS.map((f) => isExtended(lm, f));
+  const nCurled = curled.filter(Boolean).length;
   const nExt = ext.filter(Boolean).length;
   const pinchD = D(lm[4], lm[8]) / size;
-  const thumbOut = D(lm[4], lm[17]) / size > 0.9;
-  const idxOut = D(lm[8], lm[0]) > D(lm[5], lm[0]) * 1.1;
-  const othersCurled = !ext[1] && !ext[2] && !ext[3];
-  const indexCurled = !ext[0] && !idxOut;
+  const info = { pinchD, nExt, nCurled, curled, ext, thumbOut: D(lm[4], lm[17]) / size > 0.9 };
 
-  if (nExt >= 4 && thumbOut && pinchD > 0.5) return { g: 'open', pinchD, nExt, thumbOut, ext };
-  // 只伸拇指＋食指 → 縮放。捏合中食指微彎時，沿用上一幀 pinch，避免誤判握拳
-  if (othersCurled && idxOut) return { g: 'pinch', pinchD, nExt, thumbOut, ext };
-  if (prevPose === 'pinch' && othersCurled && thumbOut && !indexCurled) {
-    return { g: 'pinch', pinchD, nExt, thumbOut, ext };
-  }
-  if ((othersCurled && indexCurled && !thumbOut) || (nExt === 0 && !thumbOut)) {
-    return { g: 'fist', pinchD, nExt, thumbOut, ext };
-  }
-  return { g: 'move', pinchD, nExt, thumbOut, ext };
+  // pinch：拇指食指靠近，其他手指不限；食指需伸在外面，才不會把握拳當捏合
+  if (pinchD < PINCH_MAX && !curled[0]) return { g: 'pinch', ...info };
+  // 只伸食指：左右移動旋轉
+  if (ext[0] && nExt === 1) return { g: 'index', ...info };
+  // 握拳：至少三指捲曲，不理拇指
+  if (nCurled >= 3) return { g: 'fist', ...info };
+  // 張開：四指伸直
+  if (nExt >= 4) return { g: 'open', ...info };
+  return { g: 'move', ...info };
+}
+
+function majority(votes) {
+  if (!votes.length) return 'none';
+  const c = Object.create(null);
+  for (const g of votes) c[g] = (c[g] || 0) + 1;
+  const ranked = Object.entries(c).sort((a, b) => b[1] - a[1]);
+  const [best, n] = ranked[0];
+  if ((best === 'open' || best === 'fist' || best === 'pinch' || best === 'index') && n >= VOTE_NEED) return best;
+  return 'move';
 }
 
 export function createGestureMachine() {
   const s = {
-    pose: 'none',      // 滯後後的姿態
+    pose: 'none',
     raw: 'none',
-    enterN: 0,
-    exitN: 0,
+    votes: [],
     prevPalm: null,
     prevNow: 0,
-    speed: 0,
-    vx: 0,
-    vy: 0,
-    yawVel: 0,
-    pitchVel: 0,
-    charge: 0,
-    grace: 0,
+    hold: 0,
+    holdPose: null,
     cooldownUntil: 0,
-    rotLockUntil: 0,
     pinchRef: null,
+    smDx: 0,
+    smDy: 0,
+    lastAction: '',
+    lastActionAt: 0,
+    nExt: 0,
+    nCurled: 0,
+    pinchD: 0,
   };
 
-  function resetTracking() {
-    s.prevPalm = null;
-    s.prevNow = 0;
-    s.speed = 0;
-    s.vx = 0;
-    s.vy = 0;
-    s.charge = 0;
-    s.grace = 0;
-    s.pinchRef = null;
-  }
-
   function resetAll() {
-    resetTracking();
     s.pose = 'none';
     s.raw = 'none';
-    s.enterN = 0;
-    s.exitN = 0;
-    s.yawVel = 0;
-    s.pitchVel = 0;
+    s.votes = [];
+    s.prevPalm = null;
+    s.prevNow = 0;
+    s.hold = 0;
+    s.holdPose = null;
+    s.pinchRef = null;
+    s.smDx = 0;
+    s.smDy = 0;
   }
 
-  function latchPose(raw) {
-    if (raw === s.pose) {
-      s.enterN = POSE_ENTER;
-      s.exitN = 0;
-      return s.pose;
-    }
-    // pinch 與 open/fist 不要輕易互跳；半開手保持前一個開／合姿態直到連續多幀不同
-    if (s.pose === 'none' || s.pose === 'move') {
-      if (raw === 'open' || raw === 'fist' || raw === 'pinch') {
-        s.enterN = (s.raw === raw) ? s.enterN + 1 : 1;
-        s.raw = raw;
-        if (s.enterN >= POSE_ENTER) {
-          s.pose = raw;
-          s.exitN = 0;
-        }
-      } else {
-        s.raw = raw;
-        s.enterN = 0;
-        s.pose = raw === 'none' ? 'none' : 'move';
-      }
-      return s.pose;
-    }
-    // 已鎖定 open/fist/pinch
-    const sameFamily = (s.pose === 'pinch' && raw === 'pinch')
-      || (s.pose === 'open' && raw === 'open')
-      || (s.pose === 'fist' && raw === 'fist');
-    if (sameFamily) {
-      s.exitN = 0;
-      s.raw = raw;
-      return s.pose;
-    }
-    // pinch 過程中食指彎曲常被判成 move，不要立刻取消
-    if (s.pose === 'pinch' && (raw === 'move' || raw === 'fist')) {
-      s.exitN += 1;
-      if (s.exitN < POSE_EXIT + 1) return s.pose;
-    } else {
-      s.exitN += 1;
-    }
-    s.raw = raw;
-    if (s.exitN >= POSE_EXIT) {
-      s.pose = (raw === 'open' || raw === 'fist' || raw === 'pinch') ? raw : (raw === 'none' ? 'none' : 'move');
-      s.enterN = POSE_ENTER;
-      s.exitN = 0;
-    }
-    return s.pose;
-  }
-
-  function update({ now, landmarks, mirrored = false, ignore = false, zoom = 1, clampZ = (z) => z, clampP = (p) => p }) {
+  function update({ now, landmarks, mirrored = false, ignore = false, zoom = 1, clampZ = (z) => z }) {
     const out = {
       pose: s.pose,
       raw: 'none',
@@ -156,144 +124,113 @@ export function createGestureMachine() {
       charge: 0,
       chargeLabel: null,
       triggered: null,
-      moving: false,
-      speed: 0,
-      still: false,
+      lastAction: s.lastAction,
+      nExt: s.nExt,
+      nCurled: s.nCurled,
+      pinchD: s.pinchD,
+      hold: s.hold,
     };
 
     const dt = s.prevNow ? Math.max(0.016, Math.min(0.08, (now - s.prevNow) / 1000)) : 1 / 30;
 
     if (!landmarks) {
-      // 短暫慣性
-      if (now >= s.rotLockUntil) {
-        const decay = Math.exp(-INERTIA_DECAY * dt);
-        s.yawVel *= decay;
-        s.pitchVel *= decay;
-        if (Math.abs(s.yawVel) > 1e-4) out.dYaw = s.yawVel * dt;
-        if (Math.abs(s.pitchVel) > 1e-4) out.dPitch = s.pitchVel * dt;
-      } else {
-        s.yawVel = 0;
-        s.pitchVel = 0;
-      }
-      if (!landmarks) {
-        s.pose = 'none';
-        s.raw = 'none';
-        s.enterN = 0;
-        s.exitN = 0;
-        resetTracking();
-        s.prevNow = now;
-      }
+      resetAll();
+      s.prevNow = now;
       out.pose = 'none';
       out.status = 'none';
       return out;
     }
 
-    const cls = classifyPose(landmarks, s.pose);
+    const cls = classifyPose(landmarks);
+    s.raw = cls.g;
+    s.nExt = cls.nExt;
+    s.nCurled = cls.nCurled;
+    s.pinchD = cls.pinchD;
     out.raw = cls.g;
-    const pose = latchPose(cls.g);
+    out.nExt = cls.nExt;
+    out.nCurled = cls.nCurled;
+    out.pinchD = cls.pinchD;
+
+    s.votes.push(cls.g);
+    if (s.votes.length > VOTE_N) s.votes.shift();
+    const pose = majority(s.votes);
+    s.pose = pose;
     out.pose = pose;
 
     let palm = palmCenter(landmarks);
     if (mirrored) palm = { x: 1 - palm.x, y: palm.y };
-
-    let dx = 0, dy = 0;
-    if (s.prevPalm) {
-      dx = palm.x - s.prevPalm.x;
-      dy = palm.y - s.prevPalm.y;
-      s.vx = dx / dt;
-      s.vy = dy / dt;
-      const inst = Math.hypot(s.vx, s.vy);
-      const k = 1 - Math.exp(-dt / SPEED_SMOOTH);
-      s.speed += (inst - s.speed) * k;
-    }
+    const dx = s.prevPalm ? palm.x - s.prevPalm.x : 0;
+    const dy = s.prevPalm ? palm.y - s.prevPalm.y : 0;
     s.prevPalm = palm;
     s.prevNow = now;
-    out.speed = s.speed;
-    out.moving = s.speed >= MOVE_SUPPRESS_SPEED;
-    out.still = s.speed <= STILL_SPEED;
 
     if (ignore) {
-      s.charge = 0;
-      s.yawVel = 0;
-      s.pitchVel = 0;
+      s.hold = 0;
+      s.holdPose = null;
+      s.smDx = 0;
+      s.smDy = 0;
       out.status = pose === 'none' ? 'none' : pose;
       return out;
     }
 
-    const rotLocked = now < s.rotLockUntil;
-    const canRotate = pose !== 'pinch' && !rotLocked;
+    const cooling = now < s.cooldownUntil;
 
-    // 旋轉：任何姿態都可轉（捏合除外）；有死區與慣性
-    if (canRotate) {
-      const liveX = Math.abs(dx) > ROT_DEADZONE;
-      const liveY = Math.abs(dy) > ROT_DEADZONE;
-      if (liveX) {
-        s.yawVel = (dx / dt) * YAW_GAIN;
-        out.dYaw += dx * YAW_GAIN;
-      } else {
-        out.dYaw += s.yawVel * dt;
-        s.yawVel *= Math.exp(-INERTIA_DECAY * dt);
-      }
-      if (liveY) {
-        s.pitchVel = (dy / dt) * PITCH_GAIN;
-        out.dPitch += dy * PITCH_GAIN;
-      } else {
-        out.dPitch += s.pitchVel * dt;
-        s.pitchVel *= Math.exp(-INERTIA_DECAY * dt);
-      }
-    } else {
-      s.yawVel = 0;
-      s.pitchVel = 0;
-    }
-
-    // 捏合縮放（優先，避免被判成握拳後開合）
+    // 捏合縮放（最高優先）
     if (pose === 'pinch') {
-      s.charge = 0;
-      s.grace = 0;
-      if (!s.pinchRef) s.pinchRef = { d: Math.max(0.15, cls.pinchD), z: zoom };
+      s.hold = 0;
+      s.holdPose = null;
+      s.smDx = 0;
+      s.smDy = 0;
+      if (!s.pinchRef) s.pinchRef = { d: Math.max(0.12, cls.pinchD), z: zoom };
       out.zoom = clampZ(s.pinchRef.z * Math.pow(Math.max(0.05, cls.pinchD) / s.pinchRef.d, 0.9));
       out.status = 'pinch';
       return out;
     }
     s.pinchRef = null;
 
-    // 移動夠快時暫停開／合
-    const suppressPose = out.moving;
-    const want = (!suppressPose && out.still && (pose === 'open' || pose === 'fist'))
-      ? pose
-      : null;
-    const cooling = now < s.cooldownUntil;
+    // 只伸食指：左右／上下移動旋轉（僅此姿態）
+    if (pose === 'index') {
+      s.hold = 0;
+      s.holdPose = null;
+      const lx = Math.abs(dx) > ROT_DEADZONE ? dx : 0;
+      const ly = Math.abs(dy) > ROT_DEADZONE ? dy : 0;
+      s.smDx += (lx - s.smDx) * ROT_SMOOTH;
+      s.smDy += (ly - s.smDy) * ROT_SMOOTH;
+      out.dYaw = s.smDx * YAW_GAIN;
+      out.dPitch = s.smDy * PITCH_GAIN;
+      out.status = 'index';
+      return out;
+    }
+    s.smDx = 0;
+    s.smDy = 0;
 
+    // 張開／握拳：6 幀多數決後再維持約 0.3 秒，接著 0.8 秒冷卻
+    const want = (pose === 'open' || pose === 'fist') ? pose : null;
     if (want && !cooling) {
-      s.grace = CHARGE_GRACE_S;
-      s.charge += dt;
-    } else if (s.charge > 0 && s.grace > 0 && !cooling && !suppressPose) {
-      s.grace -= dt;
+      if (s.holdPose === want) s.hold += dt;
+      else { s.holdPose = want; s.hold = dt; }
     } else {
-      s.charge = 0;
-      s.grace = 0;
+      s.hold = 0;
+      s.holdPose = null;
     }
 
-    if (s.charge > 0 && want) {
-      out.charge = Math.min(1, s.charge / HOLD_S);
+    if (want && s.hold > 0 && !cooling) {
+      out.charge = Math.min(1, s.hold / HOLD_S);
       out.chargeLabel = want === 'open' ? '展開' : '收合';
       out.status = want === 'open' ? 'chargeOpen' : 'chargeFist';
-      if (s.charge >= HOLD_S) {
+      if (s.hold >= HOLD_S) {
         out.triggered = want === 'open' ? 'explode' : 'collapse';
-        s.charge = 0;
-        s.grace = 0;
+        s.lastAction = out.triggered;
+        s.lastActionAt = now;
+        s.hold = 0;
+        s.holdPose = null;
+        s.votes = [];
         s.cooldownUntil = now + COOLDOWN_S * 1000;
-        s.rotLockUntil = now + ROT_LOCK_S * 1000;
-        s.yawVel = 0;
-        s.pitchVel = 0;
-        out.dYaw = 0;
-        out.dPitch = 0;
         out.charge = 0;
         out.chargeLabel = null;
         out.status = want;
+        out.lastAction = s.lastAction;
       }
-    } else if (suppressPose) {
-      out.status = 'move';
     } else {
       out.status = pose === 'none' ? 'none' : pose;
     }
@@ -301,5 +238,5 @@ export function createGestureMachine() {
     return out;
   }
 
-  return { update, reset: resetAll, getState: () => ({ ...s }) };
+  return { update, reset: resetAll, getState: () => ({ ...s, votes: s.votes.slice() }) };
 }

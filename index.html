@@ -14,14 +14,14 @@
     font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; }
   body { background: radial-gradient(120% 80% at 50% 30%, #2a3546 0%, #121822 55%, #07090d 100%); }
   body.cam { background: #000; }
-  #video, #bgStill { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .4s; }
+  #video, #bgStill, #bgStillImg { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .4s; z-index: 0; background: transparent; }
   body.cam #video { opacity: 1; }
   body.cam.dual-still #video { opacity: 0; }
-  body.cam.dual-still #bgStill { opacity: 1; }
+  body.cam.dual-still #bgStill, body.cam.dual-still #bgStillImg { opacity: 1; }
   #video.mirror, #videoFront.mirror { transform: scaleX(-1); }
   body.cam.dual #shade { background: linear-gradient(180deg, rgba(0,0,0,.28), rgba(0,0,0,0) 22%, rgba(0,0,0,0) 70%, rgba(0,0,0,.38)); }
-  #shade { position: fixed; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,0) 25%, rgba(0,0,0,0) 65%, rgba(0,0,0,.55)); }
-  #gl { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+  #shade { position: fixed; inset: 0; pointer-events: none; z-index: 1; background: linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,0) 25%, rgba(0,0,0,0) 65%, rgba(0,0,0,.55)); }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; z-index: 2; background: transparent !important; }
   #labels { position: fixed; inset: 0; pointer-events: none; }
   .lbl { position: absolute; left: 0; top: 0; padding: 3px 8px 4px; border-radius: 8px; background: rgba(10,16,26,.72);
     border: 1px solid rgba(120,190,255,.45); font-size: 12px; line-height: 1.15; white-space: nowrap; text-align: center;
@@ -98,24 +98,177 @@
   body.ar header, body.ar footer, body.ar #gesture, body.ar #pip, body.ar #help, body.ar #intro, body.ar #shade, body.ar #labels, body.ar #video, body.ar #bgStill, body.ar #camHint, body.ar #modeSheet { visibility: hidden; }
   @media (max-width: 600px) { .lbl small { display: none; } .lbl { font-size: 11.5px; padding: 3px 7px; } }
   @media (min-width: 900px) { .title h1 { font-size: 20px; } #pip { width: 160px; height: 120px; } .lbl { font-size: 13.5px; } }
+
+  #modeTabs { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 8px);
+    z-index: 8; display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--glass);
+    border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); pointer-events: auto; }
+  #modeTabs button { appearance: none; border: 0; background: transparent; color: #c5d0de; font: inherit;
+    font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  #modeTabs button[aria-selected="true"] { background: #3aa0ff; color: #fff; }
+  header { padding-top: calc(env(safe-area-inset-top) + 48px) !important; }
+  #gesture { top: calc(env(safe-area-inset-top) + 96px); }
+  #camHint { top: calc(env(safe-area-inset-top) + 136px); }
+  #pip { top: calc(env(safe-area-inset-top) + 148px); }
+  #gdebug { position: fixed; left: 8px; bottom: calc(env(safe-area-inset-bottom) + 72px); z-index: 9;
+    margin: 0; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,.72); color: #b8ffd0;
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 56vw; white-space: pre-wrap;
+    display: none; pointer-events: none; }
+  body.debug #gdebug { display: block; }
+  #trackPanel { display: none; position: fixed; inset: 0; z-index: 5; }
+  body.mode-track #trackPanel { display: block; }
+  body.mode-track #gesture, body.mode-track footer, body.mode-track #pip, body.mode-track #camHint,
+  body.mode-track #labels, body.mode-track #shade, body.mode-track #gl, body.mode-track #video,
+  body.mode-track #bgStill, body.mode-track #bgStillImg, body.mode-track #intro, body.mode-track #help { visibility: hidden; pointer-events: none; }
+  body.mode-assembly footer, body.mode-track footer { display: none; }
+  body.mode-assembly #intro { visibility: hidden; pointer-events: none; }
+  body.mode-assembly .demo-only { display: none !important; }
+  body:not(.mode-assembly) .asm-only { display: none !important; }
+  body:not(.mode-track) .track-only { display: none !important; }
+  body.mode-track .demo-only { visibility: hidden; pointer-events: none; }
+  #trackAr { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+  #trackAr video, #trackAr canvas { touch-action: none; }
+  #trackScan { position: absolute; inset: 0; z-index: 3; display: none; pointer-events: none;
+    align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
+  body.mode-track.searching #trackScan { display: flex; }
+  .track-frame { width: min(68vw, 280px); aspect-ratio: 1; border: 2px solid rgba(58,160,255,.85);
+    border-radius: 18px; box-shadow: 0 0 0 200vmax rgba(0,0,0,.28); position: relative; }
+  .track-frame::before, .track-frame::after { content: ""; position: absolute; width: 22px; height: 22px; border: 3px solid #e8ba4a; }
+  .track-frame::before { top: -3px; left: -3px; border-right: 0; border-bottom: 0; border-radius: 8px 0 0 0; }
+  .track-frame::after { bottom: -3px; right: -3px; border-left: 0; border-top: 0; border-radius: 0 0 8px 0; }
+  #trackScan b { font-size: 15px; text-shadow: 0 1px 8px #000; }
+  #trackScan span { font-size: 12px; color: #c9d4e4; text-shadow: 0 1px 8px #000; }
+  #trackHud { position: absolute; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 16px);
+    z-index: 4; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #trackLabel { max-width: 420px; width: 100%; padding: 12px 16px 14px; border-radius: 16px;
+    background: var(--glass); border: 1px solid var(--line);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); text-align: center;
+    opacity: 0; transform: translateY(8px); transition: .25s; }
+  body.mode-track.found #trackLabel { opacity: 1; transform: none; }
+  #trackLabel .name { font-size: 18px; font-weight: 700; }
+  #trackLabel .spec { margin-top: 2px; font-size: 12.5px; color: #c5d2e4; }
+  #trackLabel .hint { margin-top: 6px; font-size: 11px; color: #8fa0b6; }
+  #trackPips { display: flex; gap: 6px; justify-content: center; }
+  #trackPips .pip { width: 7px; height: 7px; border-radius: 99px; background: rgba(255,255,255,.28); transition: .2s; }
+  #trackPips .pip.on { background: #e8ba4a; transform: scale(1.35); }
+  #trackIntro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px;
+    background: rgba(6,9,14,.72); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  #trackIntro.hide { display: none; }
+  #trackIntro .card { max-width: 380px; width: 100%; padding: 22px 20px 20px; border-radius: 22px;
+    background: rgba(18,25,37,.94); border: 1px solid var(--line); text-align: center; }
+  #trackIntro h2 { margin: 4px 0 6px; font-size: 21px; }
+  #trackIntro p { margin: 0 0 12px; color: #b2c0d3; font-size: 14px; line-height: 1.55; }
+  #trackBarWrap { height: 6px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; margin: 4px 0 14px; }
+  #trackBar { height: 100%; width: 0%; background: linear-gradient(90deg, #3aa0ff, #e8ba4a); transition: width .2s; }
+  #trackLoadTxt { font-size: 12px; color: #9fb0c6; min-height: 1.3em; margin: 0 0 8px; }
+  #trackStart { display: block; width: 100%; height: 50px; border-radius: 16px; border: 0;
+    background: linear-gradient(180deg, #3aa0ff, #1f6fd1); color: #fff; font-size: 16px; font-weight: 600; font-family: inherit; cursor: pointer; }
+  #trackStart:disabled { opacity: .5; cursor: default; }
+  #trackIntro a.ghost { display: block; margin-top: 8px; height: 44px; line-height: 44px; text-decoration: none; color: #eef3fa; font-weight: 600; }
+
+  /* assembly UI */
+  :root { --asm-acc: #3ee0c8; --asm-warn: #ffb020; --asm-ok: #5bd68a; --sidebar: 300px; --safe-t: env(safe-area-inset-top, 0px); --safe-b: env(safe-area-inset-bottom, 0px); }
+  aside.sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar); z-index: 7;
+    padding: calc(var(--safe-t) + 92px) 12px calc(var(--safe-b) + 16px);
+    background: linear-gradient(90deg, rgba(8,12,18,.88) 70%, rgba(8,12,18,0));
+    display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+  aside.sidebar > * { pointer-events: auto; }
+  .side-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 6px; }
+  .side-head h2 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em; color: #9aacbf; }
+  .prog { font-size: 12px; color: var(--asm-acc); font-variant-numeric: tabular-nums; }
+  .bar { height: 4px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; margin: 0 6px; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2aa992, var(--asm-acc)); border-radius: 99px; transition: width .35s ease; }
+  #stepList { list-style: none; margin: 0; padding: 4px; overflow: auto; flex: 1; border-radius: 16px;
+    background: rgba(14,20,30,.78); border: 1px solid var(--line); backdrop-filter: blur(12px); }
+  #stepList button.step-item { width: 100%; text-align: left; border: 0; background: transparent; color: inherit;
+    border-radius: 10px; padding: 8px; display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: center; cursor: pointer; }
+  #stepList button.step-item.current { background: rgba(255,176,32,.16); }
+  .idx { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; border: 1px solid var(--line); color: #9aacbf; }
+  .current .idx { background: var(--asm-warn); color: #2a1c00; border-color: transparent; }
+  .done .idx { background: rgba(91,214,138,.16); color: var(--asm-ok); }
+  .step-item .name { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .disclaimer { font-size: 10.5px; line-height: 1.45; color: #7f8fa3; padding: 0 8px; }
+  #asmCard { position: fixed; z-index: 8; right: 16px; bottom: calc(var(--safe-b) + 16px);
+    width: min(420px, calc(100vw - var(--sidebar) - 36px));
+    background: rgba(14,20,30,.82); border: 1px solid var(--line); border-radius: 18px;
+    backdrop-filter: blur(16px); padding: 14px 16px 12px; }
+  #asmCard .kicker { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; letter-spacing: .08em; color: var(--asm-warn); font-weight: 700; }
+  #asmCard h3 { margin: 4px 0 6px; font-size: 18px; font-weight: 750; }
+  #asmCard .inst { margin: 0 0 10px; font-size: 13.5px; line-height: 1.55; color: #d5deea; }
+  .tools { display: grid; gap: 6px; margin: 0 0 10px; }
+  .tool { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; font-size: 12.5px; padding: 6px 8px;
+    border-radius: 10px; background: rgba(0,0,0,.22); }
+  .tool small { color: #9aacbf; }
+  .notes { font-size: 12px; color: #9aacbf; line-height: 1.45; }
+  .card-nav { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .card-nav .complete { margin-right: auto; font-size: 13px; }
+  .swipe-hint { font-size: 11px; color: #7f8fa3; margin: 8px 0 0; }
+  .sheet-handle { display: none; }
+  #btnMenu, #btnSheet { display: none; }
+  .ann-sec { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+  .ann-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+  .ann-head h4 { margin: 0; font-size: 11px; letter-spacing: .08em; color: #9aacbf; }
+  .ann-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 132px; overflow: auto; }
+  .ann-list:empty::after { content: "本步驟尚無標註。按「新增」後，點模型表面即可放置。"; display: block; font-size: 12px; color: #9aacbf; padding: 4px 2px; }
+  button.ann-item { width: 100%; text-align: left; border: 1px solid transparent; background: rgba(0,0,0,.18);
+    color: inherit; border-radius: 10px; padding: 6px 8px; display: grid; grid-template-columns: 22px 1fr auto; gap: 6px; align-items: center; cursor: pointer; font-size: 12.5px; }
+  button.ann-item.sel { border-color: var(--asm-warn); background: rgba(255,176,32,.16); }
+  .ann-dot { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,.35); }
+  .modal { position: fixed; inset: 0; z-index: 25; background: rgba(4,6,10,.62); display: grid; place-items: center; padding: 24px 16px; }
+  .modal[hidden] { display: none !important; }
+  .sheet { width: min(520px, 100%); background: #141c28; border: 1px solid var(--line); border-radius: 20px; padding: 18px; }
+  .sheet h2 { margin: 0 0 6px; font-size: 18px; }
+  .sheet .lead { margin: 0 0 12px; color: #9aacbf; font-size: 13px; line-height: 1.5; }
+  .scan-view { position: relative; height: 240px; border-radius: 14px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+  .scan-view video { width: 100%; height: 100%; object-fit: cover; }
+  .scan-frame { position: absolute; inset: 18%; border: 2px solid var(--asm-acc); border-radius: 12px; pointer-events: none; }
+  .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .sheet input[type=text] { flex: 1; min-width: 140px; border-radius: 999px; border: 1px solid var(--line); background: rgba(0,0,0,.28); padding: 8px 12px; color: inherit; }
+  .file-btn input { display: none; }
+  .types, .swatches { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .swatch.sel { border-color: #fff; }
+  .sheet textarea { width: 100%; min-height: 72px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,.28); color: inherit; padding: 8px 10px; margin: 0 0 12px; }
+  .sheet .fld { display: block; font-size: 12px; color: #9aacbf; font-weight: 650; margin: 0 0 6px; }
+  .backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 6; }
+  body.sidebar-open .backdrop { display: block; }
+  body.annotating #gl { cursor: crosshair; }
+  body.mode-assembly.ar aside.sidebar, body.mode-assembly.ar #asmCard { display: none !important; }
+  @media (max-width: 900px) {
+    #btnMenu, #btnSheet { display: inline-flex; }
+    aside.sidebar { width: min(88vw, 340px); transform: translateX(-105%); transition: transform .28s; background: #141c28; pointer-events: auto; z-index: 9; }
+    body.sidebar-open aside.sidebar { transform: none; }
+    #asmCard { left: 0; right: 0; width: auto; bottom: 0; border-radius: 18px 18px 0 0; max-height: 72dvh; overflow: auto; }
+    .sheet-handle { display: flex; justify-content: center; padding: 9px 0 4px; }
+    .sheet-handle i { width: 40px; height: 4px; border-radius: 99px; background: rgba(255,255,255,.32); }
+    body.sheet-collapsed #sheetBody, body.sheet-collapsed .swipe-hint, body.sheet-collapsed #btnReplay { display: none; }
+  }
 </style>
 </head>
 <body>
 <video id="video" playsinline muted autoplay></video>
 <canvas id="bgStill"></canvas>
+<img id="bgStillImg" alt="">
 <div id="shade"></div>
 <canvas id="gl"></canvas>
 <div id="labels"></div>
 <header>
-  <div class="title"><h1>2U 機架式伺服器</h1><p>手勢互動 3D 爆炸圖展示</p></div>
+  <div class="title"><h1 id="docTitle">2U 機架式伺服器</h1><p><span id="deviceName">手勢互動 3D 爆炸圖展示</span> <span id="deviceCode" class="asm-only"></span></p></div>
   <button id="btnSound" class="iconbtn" type="button" title="開啟音效">🔊 開啟音效</button>
   <a id="btnAR" class="iconbtn" title="AR">AR</a>
   <button id="btnMode" class="iconbtn" type="button" title="鏡頭模式" hidden>🎥 鏡頭模式</button>
   <button id="btnFlip" class="iconbtn" type="button" title="切換鏡頭" hidden>🔄 切換鏡頭</button>
   <button id="btnReshoot" class="iconbtn" type="button" title="重拍背景" hidden>📷 重拍背景</button>
   <button id="btnHelp" class="iconbtn" title="操作說明">?</button>
-  <a class="iconbtn" href="assembly/" title="組裝教學" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">組裝</a>
+  <button id="btnScan" class="iconbtn asm-only" type="button" title="掃描設備" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">掃描</button>
+  <button id="btnResetAsm" class="iconbtn asm-only" type="button" title="重設進度" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">重設</button>
+  <a id="btnCard" class="iconbtn track-only" href="track/card.html" target="_blank" rel="noopener" title="列印卡片" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">列印卡片</a>
 </header>
+<nav id="modeTabs" role="tablist" aria-label="模式">
+  <button type="button" data-app-mode="demo" aria-selected="true">展示</button>
+  <button type="button" data-app-mode="assembly">組裝</button>
+  <button type="button" data-app-mode="track">圖像追蹤</button>
+</nav>
 <div id="gesture">
   <span id="gicoWrap">
     <svg id="gRing" viewBox="0 0 36 36" aria-hidden="true">
@@ -138,9 +291,11 @@
 <div id="help">
   <h3>操作方式</h3>
   <table>
-    <tr><td>👋</td><td><b>手左右／上下移動</b>：旋轉模型（張開或握拳移動都可以轉，不會觸發開合）</td></tr>
-    <tr><td>🖐️</td><td><b>張開手掌並靜止約半秒</b>：零件分層展開（會顯示進度環）</td></tr>
-    <tr><td>✊</td><td><b>握拳並靜止約半秒</b>：收合回伺服器</td></tr>
+    <tr class="legend-demo"><td>🖐️</td><td><b>張開手掌</b>（約 0.3 秒）：零件分層展開</td></tr>
+    <tr class="legend-demo"><td>✊</td><td><b>握拳</b>（約 0.3 秒）：收合回伺服器</td></tr>
+    <tr class="legend-asm" hidden><td>🖐️</td><td><b>張開手掌</b>（約 0.3 秒）：下一步</td></tr>
+    <tr class="legend-asm" hidden><td>✊</td><td><b>握拳</b>（約 0.3 秒）：上一步</td></tr>
+    <tr><td>☝️</td><td><b>只伸食指並左右／上下移動</b>：旋轉模型</td></tr>
     <tr><td>🤏</td><td><b>拇指＋食指捏合</b>：張開放大、捏緊縮小</td></tr>
     <tr><td>👆</td><td><b>沒有相機時</b>：單指拖曳旋轉、雙指縮放、點兩下展開／收合</td></tr>
   </table>
@@ -154,7 +309,7 @@
   <div class="card">
     <div style="font-size:40px">🖐️</div>
     <h2>用手勢拆解伺服器</h2>
-    <p>開啟相機後，手左右移動即可旋轉模型。張開手掌或握拳並靜止約半秒，才會展開或收合。也可選雙鏡頭：前置控制手勢，後置當真實背景。</p>
+    <p>手機預設會開雙鏡頭：前置控制手勢，後置當真實背景。張開手掌展開、握拳收合、只伸食指左右移動旋轉、捏合縮放。上方可切換展示／組裝模式。</p>
     <button id="startCam" class="btn primary">開啟相機，用手勢玩</button>
     <button id="startDual" class="btn">雙鏡頭：前控制、後背景</button>
     <button id="startTouch" class="btn">不用相機，用手指操作</button>
@@ -164,13 +319,119 @@
 <div id="loading"><div id="loadtxt">載入伺服器模型…</div></div>
 <div id="toast"></div>
 
+
+<div id="trackPanel">
+  <div id="trackAr" aria-hidden="true"></div>
+  <div id="trackScan">
+    <div class="track-frame"></div>
+    <b>請將後鏡頭對準卡片</b>
+    <span>可列印或在另一台裝置打開卡片頁</span>
+  </div>
+  <div id="trackHud">
+    <div id="trackPips" aria-hidden="true"></div>
+    <div id="trackLabel">
+      <div class="name">整機</div>
+      <div class="spec">2U 機架式伺服器（示例）</div>
+      <div class="hint">轉動卡片約 45°，或輕觸畫面切換</div>
+    </div>
+  </div>
+  <div id="trackIntro">
+    <div class="card">
+      <h2>伺服器立體卡片</h2>
+      <p>用後鏡頭對準「伺服器 AR 卡」，整台伺服器會浮在卡片上。轉動卡片，周圍選單會切換零件。</p>
+      <div id="trackBarWrap"><div id="trackBar"></div></div>
+      <div id="trackLoadTxt">準備資源…</div>
+      <button class="btn primary" id="trackStart" type="button" disabled>開啟相機</button>
+      <a class="ghost" href="track/card.html" target="_blank" rel="noopener">先看／列印卡片</a>
+    </div>
+  </div>
+</div>
+
+<div class="backdrop asm-only" id="backdrop"></div>
+<aside class="sidebar asm-only" id="sidebar">
+  <div class="side-head"><h2>組裝步驟</h2><span class="prog" id="progText">0／10 完成</span></div>
+  <div class="bar" aria-hidden="true"><i id="progBar"></i></div>
+  <ul id="stepList"></ul>
+  <p class="disclaimer">本頁為機櫃整合（L11）概念的簡化示範。標示「示例」的螺絲數量與力矩並非實機規格，實務請依原廠手冊。</p>
+</aside>
+<section id="asmCard" class="asm-only">
+  <div class="sheet-handle" id="sheetHandle"><i></i></div>
+  <div class="kicker">
+    <span id="stepKicker">步驟 1／10</span>
+    <div>
+      <button class="btn small" id="btnMenu" type="button">☰ 步驟</button>
+      <button class="btn small" id="btnReplay" type="button">重播動畫</button>
+      <button class="btn small" id="btnSheet" type="button">說明</button>
+    </div>
+  </div>
+  <h3 id="stepTitle">機殼底座</h3>
+  <div class="sheet-body" id="sheetBody">
+    <p class="inst" id="stepInst"></p>
+    <div class="tools" id="stepTools"></div>
+    <p class="notes" id="stepNotes"></p>
+    <div class="ann-sec">
+      <div class="ann-head">
+        <h4>本步驟標註</h4>
+        <div>
+          <button class="btn small" id="btnAnnotate" type="button">新增</button>
+          <button class="btn small" id="btnAnnExport" type="button">匯出</button>
+          <label class="btn small file-btn">匯入<input type="file" id="annFile" accept="application/json,.json"></label>
+        </div>
+      </div>
+      <ul class="ann-list" id="annList"></ul>
+    </div>
+  </div>
+  <div class="card-nav">
+    <label class="complete"><input type="checkbox" id="chkDone"> 完成</label>
+    <button class="btn small" id="btnPrev" type="button">上一步</button>
+    <button class="btn small primary" id="btnNext" type="button">下一步</button>
+  </div>
+  <p class="swipe-hint">在此卡片左右滑動也可切換步驟</p>
+</section>
+
+<div class="modal asm-only" id="scanModal" hidden>
+  <div class="sheet">
+    <h2>掃描設備</h2>
+    <p class="lead">對準機箱上的 QR 代碼以載入對應教學。也可以上傳圖片或手動輸入代碼。列印範本請開 <a href="qr.html" target="_blank" rel="noopener">qr.html</a>。</p>
+    <div class="scan-view"><video id="scanVideo" playsinline muted></video><div class="scan-frame"></div></div>
+    <div class="sheet-actions">
+      <label class="btn small file-btn">上傳圖片<input type="file" id="qrFile" accept="image/*"></label>
+      <input type="text" id="qrManual" placeholder="例如 SRV-2U-DEMO" autocomplete="off" spellcheck="false">
+      <button class="btn small primary" id="btnManual" type="button">載入</button>
+      <button class="btn small" id="btnScanClose" type="button">關閉</button>
+    </div>
+  </div>
+</div>
+<div class="modal asm-only" id="annModal" hidden>
+  <div class="sheet">
+    <h2 id="annModalTitle">新增標註</h2>
+    <p class="part-line" id="annPartLine"></p>
+    <label class="fld">類型</label>
+    <div class="types" id="annTypes"></div>
+    <label class="fld">顏色</label>
+    <div class="swatches" id="annColors"></div>
+    <label class="fld" for="annText">說明文字（選填，最多 80 字）</label>
+    <textarea id="annText" maxlength="80" placeholder="例如：對準插座缺口後垂直放下"></textarea>
+    <div class="sheet-actions">
+      <button class="btn small" id="btnAnnDelete" type="button" hidden>刪除</button>
+      <span style="flex:1"></span>
+      <button class="btn small" id="btnAnnCancel" type="button">取消</button>
+      <button class="btn small primary" id="btnAnnSave" type="button">儲存</button>
+    </div>
+  </div>
+</div>
+<pre id="gdebug"></pre>
+
 <div id="arOverlay">
   <div class="ar-bar">
     <p id="arHint">對準桌面或地面，點一下或捏合即可放置</p>
     <div class="ar-actions">
       <button id="btnARSound" class="btn small" type="button" style="width:auto;padding:0 12px;flex:0 0 auto">🔊 開啟音效</button>
       <button id="btnARPlace" class="btn small" type="button">移動</button>
-      <button id="btnARToggle" class="btn primary" type="button">展開</button>
+      <button id="btnARToggle" class="btn primary demo-only" type="button">展開</button>
+      <button id="btnARPrev" class="btn small asm-only" type="button">上一步</button>
+      <button id="btnARReplay" class="btn small asm-only" type="button">重播</button>
+      <button id="btnARNext" class="btn small primary asm-only" type="button">下一步</button>
       <button id="btnARExit" class="btn" type="button" style="flex:0 0 auto;width:auto;padding:0 16px">結束 AR</button>
     </div>
   </div>

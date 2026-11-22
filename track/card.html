@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>伺服器 AR 卡 · 列印</title>
+<style>
+  :root { --ink:#10141c; --muted:#5b6573; --line:#d9dee6; --acc:#1f6fd1; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--ink);
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    background: #f3f5f8;
+  }
+  header { max-width: 720px; margin: 0 auto; padding: 28px 20px 8px; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p { margin: 0 0 8px; color: var(--muted); line-height: 1.6; font-size: 15px; }
+  ol { margin: 8px 0 0; padding-left: 1.3em; color: var(--ink); line-height: 1.65; }
+  .sheet {
+    width: 210mm; max-width: 100%; margin: 16px auto 32px;
+    background: #fff; padding: 16mm 14mm 14mm;
+    box-shadow: 0 8px 28px rgba(16,20,28,.12);
+  }
+  .stage { display: flex; justify-content: center; }
+  .cut {
+    position: relative;
+    width: 9cm; height: 9cm;
+  }
+  .cut img { width: 100%; height: 100%; display: block; image-rendering: auto; }
+  .tick { position: absolute; width: 8px; height: 8px; pointer-events: none; }
+  .tick.tl { left: -10px; top: -10px; border-left: 1.5px solid #222; border-top: 1.5px solid #222; }
+  .tick.tr { right: -10px; top: -10px; border-right: 1.5px solid #222; border-top: 1.5px solid #222; }
+  .tick.bl { left: -10px; bottom: -10px; border-left: 1.5px solid #222; border-bottom: 1.5px solid #222; }
+  .tick.br { right: -10px; bottom: -10px; border-right: 1.5px solid #222; border-bottom: 1.5px solid #222; }
+  .cap { text-align: center; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  a.btn, button.btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 42px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line);
+    background: #fff; color: var(--ink); text-decoration: none; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  a.btn.primary, button.btn.primary { background: var(--acc); color: #fff; border-color: transparent; }
+  @media print {
+    body { background: #fff; }
+    header, .actions { display: none !important; }
+    .sheet { box-shadow: none; margin: 0; padding: 12mm; width: auto; }
+    @page { size: A4 portrait; margin: 10mm; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>伺服器 AR 卡</h1>
+  <p>把這張卡片列印出來（約 9 公分正方形），再用手機後鏡頭對準，伺服器就會浮在卡片上方。轉動卡片，每次約 45 度會切換零件。</p>
+  <ol>
+    <li>用彩色列印，勿縮放（本頁已設成邊長 9 公分）。</li>
+    <li>沿裁切線剪成正方形，盡量保持平整，避免反光膜。</li>
+    <li>平放在光線均勻的桌上，打開 <a href="../?mode=track">圖像追蹤頁</a>，按「開啟相機」。</li>
+    <li>也可以把這頁開在另一台螢幕或平板上當卡片。</li>
+  </ol>
+  <div class="actions">
+    <button class="btn primary" onclick="window.print()">列印此頁</button>
+    <a class="btn" href="../?mode=track">開始追蹤</a>
+    <a class="btn" href="card.png" download="伺服器AR卡.png">下載 PNG</a>
+  </div>
+</header>
+<div class="sheet">
+  <div class="stage">
+    <div class="cut" aria-label="可裁切的 9 公分正方形標記卡">
+      <span class="tick tl"></span><span class="tick tr"></span>
+      <span class="tick bl"></span><span class="tick br"></span>
+      <img src="card.png" alt="伺服器 AR 卡，不對稱標記圖，文字為伺服器 AR 卡">
+    </div>
+  </div>
+  <p class="cap">裁切尺寸 9 × 9 公分　·　「此邊朝下」對準自己時，選項從「整機」開始</p>
+</div>
+</body>
+</html>

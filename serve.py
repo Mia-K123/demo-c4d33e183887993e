@@ -13,6 +13,7 @@ class Handler(SimpleHTTPRequestHandler):
         '.wasm': 'application/wasm', '.hdr': 'image/vnd.radiance',
         '.ktx2': 'image/ktx2', '.task': 'application/octet-stream',
         '.json': 'application/json', '.mp3': 'audio/mpeg',
+        '.mind': 'application/octet-stream',
     })
 
     def end_headers(self):
