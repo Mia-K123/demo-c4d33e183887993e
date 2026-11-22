@@ -7,7 +7,12 @@ import { createGestureMachine, classifyPose } from './gestures.mjs';
 import { createAssembly } from './assembly-mode.js';
 
 const $ = (s) => document.querySelector(s);
-const rel = (p) => new URL(p, document.baseURI).href;   // 所有路徑相對於本頁，可放在任何子路徑
+const ASSET_VER = (typeof __ASSET_VER__ !== 'undefined' && __ASSET_VER__) ? String(__ASSET_VER__) : 'dev';
+const rel = (p) => {
+  const u = new URL(p, document.baseURI);
+  if (!u.searchParams.has('v')) u.searchParams.set('v', ASSET_VER);
+  return u.href;
+};
 const isTouch = matchMedia('(pointer: coarse)').matches;
 const PORTRAIT0 = innerHeight > innerWidth; const YAW0 = PORTRAIT0 ? -0.42 : -0.66, PITCH0 = PORTRAIT0 ? 0.5 : 0.36;
 const state = { explode: 0, target: 0, yaw: YAW0, pitch: PITCH0, zoom: 1, tYaw: YAW0, tPitch: PITCH0, tZoom: 1,
@@ -105,6 +110,7 @@ function setExplodePositions(t) {
 
 function resize() {
   if (renderer.xr.isPresenting) return;
+  if (state.trackSim) { layoutTrackSim(); return; }
   const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize); resize();
@@ -168,6 +174,7 @@ function frame(now, xrFrame) {
     if (!assembly?.state.active) updateLabels();
     else { for (const gr of Object.values(groups)) if (gr.el) gr.el.style.opacity = 0; }
   }
+  if (state.trackSim) state.simFrames = (state.simFrames || 0) + 1;
   noteRenderFps(now);
   updateDebug(state.gLast);
   if (snd.thudWhen && snd.ctx && snd.ctx.currentTime >= snd.thudWhen) {
@@ -461,7 +468,7 @@ canvas.addEventListener('pointermove', (e) => {
   ptrs.set(e.pointerId, [e.clientX, e.clientY]);
   if (ptrs.size === 2) { moved = true; const [a, b] = [...ptrs.values()]; state.tZoom = clampZ(zoom0 * Math.hypot(a[0] - b[0], a[1] - b[1]) / pinch0); }
 });
-const up = (e) => { if (ptrs.size === 1 && !moved) { const t = performance.now(); if (t - lastTap < 320) setTarget(state.target ? 0 : 1); lastTap = t; } ptrs.delete(e.pointerId); };
+const up = (e) => { if (ptrs.size === 1 && !moved && !state.trackSim) { const t = performance.now(); if (t - lastTap < 320) setTarget(state.target ? 0 : 1); lastTap = t; } ptrs.delete(e.pointerId); };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); state.tZoom = clampZ(state.tZoom * Math.exp(-e.deltaY * 0.0012)); }, { passive: false });
 addEventListener('keydown', (e) => {
@@ -1609,6 +1616,7 @@ function updateDebug(r) {
     `cam=${state.camMode} kind=${state.dualKind || '-'} facing=${state.facing} on=${!!state.camOn}`,
     `fps det=${fpsMeter.detFps || 0} infer=${Math.round(fpsMeter.detMs)}ms rend=${fpsMeter.drawFps || 0} rvfc=${fpsMeter.rvfc ? 1 : 0} src=${fpsMeter.srcW || '-'}`,
     `clearAlpha=${renderer.getClearAlpha()} still=${stillIsNonBlack() ? 'ok' : 'no'} bg=${scene.background == null ? 'null' : 'set'}`,
+    state.trackSim ? `sim canv=${canvas.width}x${canvas.height} css=${canvas.clientWidth}x${canvas.clientHeight} meshes=${state.simMeshCount ?? 0} frames=${state.simFrames || 0}` : `asset=${ASSET_VER}`,
   ].join('\n');
 }
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
@@ -1748,20 +1756,30 @@ function syncTrackPips(index) {
   }
 }
 
-function trackItemList() { return trackMod?.ITEMS || []; }
+const TRACK_ITEMS = [
+  { id: 'all', zh: '整機', spec: '2U 機架式伺服器（示例）', groups: null, hue: '#3aa0ff' },
+  { id: 'board', zh: '主機板', spec: '伺服器主機板（示例）', groups: ['board'], hue: '#5ad0c8' },
+  { id: 'cpu', zh: 'CPU', spec: '雙路 CPU 散熱器（示例）', groups: ['cpu'], hue: '#e8ba4a' },
+  { id: 'ram', zh: '記憶體', spec: 'DDR5 RDIMM ×16（示例）', groups: ['ram'], hue: '#7cbcff' },
+  { id: 'drive', zh: '硬碟', spec: '3.5" 熱插拔硬碟 ×12（示例）', groups: ['drive'], hue: '#9ad36a' },
+  { id: 'psu', zh: '電源', spec: '備援電源供應器 ×2（示例）', groups: ['psu'], hue: '#ff9a3a' },
+  { id: 'fan', zh: '風扇', spec: '80mm 風扇牆 ×4（示例）', groups: ['fan'], hue: '#c9d6e6' },
+  { id: 'pcie', zh: '擴充卡', spec: 'PCIe 網路擴充卡（示例）', groups: ['pcie'], hue: '#d07cff' },
+];
+function trackItemList() { return trackMod?.ITEMS || TRACK_ITEMS; }
 
 function setTrackItem(index) {
   const items = trackItemList();
   const n = items.length || 8;
   const i = ((index % n) + n) % n;
   state.trackItemIndex = i;
-  if (trackSession?.setIndex) trackSession.setIndex(i);
+  if (state.trackSim && (state.trackSimKind === 'host' || !trackSession)) applyHostSimItem(i);
+  else if (trackSession?.setIndex) trackSession.setIndex(i);
   else {
     const item = items[i];
     if (item) applyTrackItemLabel(item, i);
     else syncTrackPips(i);
   }
-  if (trackSim?.kind === 'fallback') applyFallbackItem(i);
 }
 
 function applyTrackItemLabel(item, index) {
@@ -1815,24 +1833,175 @@ function trackOverlayInsets() {
 }
 
 function layoutTrackSim() {
-  if (!trackSim?.hold) return;
-  const { top, bottom, width, height } = trackOverlayInsets();
-  if (height < 2) return;
-  const mid = top + Math.max(1, height - top - bottom) / 2;
-  const frac = (mid - height / 2) / (height / 2);
-  if (trackSim.kind === 'ar') {
-    const cam = trackSim.camera;
-    const fov = ((cam?.fov) || 45) * Math.PI / 180;
-    const z = Math.abs(trackSim.hold.position.z) || 0.62;
-    trackSim.hold.position.y = -frac * Math.tan(fov / 2) * z;
-  } else if (trackSim.kind === 'fallback') {
-    const cam = trackSim.camera;
-    const fov = ((cam?.fov) || 32) * Math.PI / 180;
-    const z = Math.abs((cam?.position?.z || 1.4) - (trackSim.hold.position.z || 0));
-    trackSim.hold.position.y = -frac * Math.tan(fov / 2) * z;
-    if (cam && width > 0) { cam.aspect = width / Math.max(height, 1); cam.updateProjectionMatrix(); }
+  if (!state.trackSim) {
+    try { camera.clearViewOffset(); } catch {}
+    return;
   }
-  state.trackClear = { top, bottom, width, height };
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  const { top, bottom } = trackOverlayInsets();
+  const y = Math.max(0, Math.round(top));
+  const clearH = Math.max(1, Math.round(h - top - bottom));
+  camera.setViewOffset(w, h, 0, y, w, clearH);
+  camera.aspect = w / clearH;
+  camera.updateProjectionMatrix();
+  state.trackClear = { top: y, bottom, width: w, height: h, clearH };
+}
+
+let simBgStream = null;
+const glHomeParent = canvas.parentNode;
+const glHomeNext = canvas.nextSibling;
+
+function countSimMeshes() {
+  let n = 0;
+  (modelRoot || pivot).traverse((o) => { if (o.isMesh && o.visible) n++; });
+  state.simMeshCount = n;
+  return n;
+}
+
+function applyHostSimItem(index) {
+  const items = trackItemList();
+  const n = items.length || 8;
+  const i = ((index % n) + n) % n;
+  const item = items[i] || { id: 'all', zh: '整機', spec: '', groups: null, hue: '#3aa0ff' };
+  applyTrackItemLabel(item, i);
+  const all = item.id === 'all' || !item.groups;
+  const selected = new Set(item.groups || []);
+  const byObj = new Map(parts.map((p) => [p.obj, p.group]));
+  const groupOf = (o) => {
+    let n = o;
+    while (n) {
+      if (byObj.has(n)) return byObj.get(n);
+      const p = parts.find((pp) => pp.name && pp.name === n.name);
+      if (p) return p.group;
+      n = n.parent;
+    }
+    return null;
+  };
+  const root = modelRoot || pivot;
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = groupOf(o);
+    const on = all || (g && selected.has(g));
+    const ghost = !all && !on;
+    for (const m of [].concat(o.material || [])) {
+      if (!m) continue;
+      if (m.userData._simInit == null) {
+        m.userData._simInit = true;
+        m.userData._simOp = m.opacity;
+        m.userData._simDw = m.depthWrite;
+        m.userData._simTr = m.transparent;
+        m.userData._simEmi = m.emissiveIntensity || 0;
+        if (m.emissive) m.userData._simEm = m.emissive.clone();
+      }
+      m.transparent = true;
+      m.opacity = ghost ? 0.16 : (m.userData._simOp ?? 1);
+      m.depthWrite = !ghost;
+      if (m.emissive) {
+        if (!ghost && !all && on) { m.emissive.set(item.hue); m.emissiveIntensity = 0.35; }
+        else if (m.userData._simEm) { m.emissive.copy(m.userData._simEm); m.emissiveIntensity = m.userData._simEmi || 0; }
+      }
+    }
+  });
+  countSimMeshes();
+}
+
+function restoreSimMaterials() {
+  const root = modelRoot || pivot;
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material || [])) {
+      if (!m?.userData?._simInit) continue;
+      m.opacity = m.userData._simOp;
+      m.depthWrite = m.userData._simDw;
+      m.transparent = m.userData._simTr;
+      if (m.emissive && m.userData._simEm) {
+        m.emissive.copy(m.userData._simEm);
+        m.emissiveIntensity = m.userData._simEmi || 0;
+      }
+      delete m.userData._simInit;
+    }
+  });
+}
+
+function attachHostGlForSim() {
+  const box = $('#trackAr');
+  if (!box) throw new Error('找不到追蹤畫面容器');
+  box.appendChild(canvas);
+  renderer.setClearColor(0x000000, 0);
+  scene.background = null;
+  pivot.visible = true;
+  if (modelRoot) modelRoot.visible = true;
+  if (shadow) shadow.visible = false;
+  state.target = 0;
+  state.explode = 0;
+  setExplodePositions(0);
+  state.simFrames = 0;
+  countSimMeshes();
+}
+
+function detachHostGlFromSim() {
+  try { camera.clearViewOffset(); } catch {}
+  restoreSimMaterials();
+  if (shadow) shadow.visible = true;
+  if (glHomeNext && glHomeNext.parentNode === glHomeParent) glHomeParent.insertBefore(canvas, glHomeNext);
+  else if (glHomeParent) glHomeParent.appendChild(canvas);
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(h, 1);
+  camera.updateProjectionMatrix();
+}
+
+async function startSimBackgroundVideo() {
+  const box = $('#trackAr');
+  let v = $('#trackBgVideo');
+  if (!v) {
+    v = document.createElement('video');
+    v.id = 'trackBgVideo';
+    v.setAttribute('playsinline', '');
+    v.setAttribute('webkit-playsinline', '');
+    v.setAttribute('muted', '');
+    v.setAttribute('autoplay', '');
+    v.muted = true;
+    v.playsInline = true;
+    v.autoplay = true;
+    box.appendChild(v);
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false,
+    });
+    simBgStream = stream;
+    v.srcObject = stream;
+    try { await v.play(); } catch {}
+    state.trackCamAllowed = true;
+    state.camPermitted = true;
+    return true;
+  } catch (e) {
+    console.warn(e);
+    v.srcObject = null;
+    return false;
+  }
+}
+
+function stopSimBackgroundVideo() {
+  try { simBgStream?.getTracks?.().forEach((t) => t.stop()); } catch {}
+  simBgStream = null;
+  const v = $('#trackBgVideo');
+  if (v) {
+    try { v.srcObject = null; } catch {}
+    v.remove();
+  }
+}
+
+function cleanTrackArExtras() {
+  const box = $('#trackAr');
+  if (!box) return;
+  [...box.children].forEach((el) => {
+    if (el.id === 'gl' || el.id === 'trackBgVideo') return;
+    if (el.tagName === 'CANVAS' || el.tagName === 'VIDEO') el.remove();
+  });
 }
 
 function unbindSimPointer() { try { simPtrUnbind?.(); } catch {} simPtrUnbind = null; }
@@ -1940,134 +2109,31 @@ function disposeFallbackSim() {
   try { trackSim.canvas?.remove(); } catch {}
 }
 
-function startArSimulate() {
-  const intern = trackSession?._internal;
-  if (!intern?.root || !intern?.scene || !intern?.camera) throw new Error('追蹤場景尚未就緒');
-  const { scene, root, anchor, camera } = intern;
-  const Group = root.constructor;
-  const hold = new Group();
-  hold.name = '__simHold';
-  const homeParent = root.parent || anchor?.group;
-  if (root.parent) root.parent.remove(root);
-  hold.add(root);
-  camera.add(hold);
-  hold.position.set(0, 0, -0.62);
-  hold.rotation.set(0.12, Math.PI, 0);
-  hold.scale.setScalar(1.05);
-  trackSim = { kind: 'ar', hold, root, homeParent, scene, camera };
-  state.trackSimKind = 'ar';
-  bindSimPointer($('#trackAr'), hold);
-  requestAnimationFrame(() => layoutTrackSim());
-}
-
-function applyFallbackItem(index) {
-  if (!trackSim?.model) return;
-  const items = trackItemList();
-  const item = items[index] || { id: 'all', groups: null, hue: '#3aa0ff' };
-  const all = item.id === 'all' || !item.groups;
-  const selected = new Set(item.groups || []);
-  const nameToGroup = {};
-  for (const [name, info] of Object.entries(trackAssets?.parts?.objects || {})) nameToGroup[name] = info.group;
-  const groupOf = (o) => { let n = o; while (n) { if (nameToGroup[n.name]) return nameToGroup[n.name]; n = n.parent; } return null; };
-  trackSim.model.traverse((o) => {
-    if (!o.isMesh) return;
-    const g = groupOf(o);
-    const on = all || (g && selected.has(g));
-    const ghost = !all && !on;
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    for (const m of mats) {
-      if (!m) continue;
-      if (m.userData._fbInit == null) {
-        m.userData._fbInit = true;
-        m.userData._trans = !!m.transparent;
-        m.userData._emi = m.emissiveIntensity || 0;
-        if (m.emissive) m.userData._em = m.emissive.clone();
-        m.transparent = true;
-      }
-      m.opacity = ghost ? 0.16 : 1;
-      m.depthWrite = !ghost;
-      if (m.emissive) {
-        if (!ghost && !all && on) { m.emissive.set(item.hue); m.emissiveIntensity = 0.4; }
-        else if (m.userData._em) { m.emissive.copy(m.userData._em); m.emissiveIntensity = m.userData._emi || 0; }
-      }
-    }
-  });
-}
-
-async function startFallbackSimulate() {
-  const box = $('#trackAr');
-  if (!box) throw new Error('找不到追蹤畫面容器');
-  if (!trackAssets?.glbBuf) throw new Error('模型尚未預載');
-  const cnv = document.createElement('canvas');
-  cnv.id = 'trackSimCanvas';
-  cnv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1;touch-action:none;background:transparent';
-  box.appendChild(cnv);
-  const r = new THREE.WebGLRenderer({ canvas: cnv, antialias: true, alpha: true });
-  r.setClearColor(0x070b12, 1);
-  r.setPixelRatio(Math.min(devicePixelRatio, 2));
-  r.outputColorSpace = THREE.SRGBColorSpace;
-  const sc = new THREE.Scene();
-  const cam = new THREE.PerspectiveCamera(32, 1, 0.01, 100);
-  cam.position.set(0, 0.12, 1.4);
-  cam.lookAt(0, 0, 0);
-  sc.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const d1 = new THREE.DirectionalLight(0xffffff, 1.35); d1.position.set(2, 3, 4); sc.add(d1);
-  const d2 = new THREE.DirectionalLight(0x9fc4ff, 0.8); d2.position.set(-3, 1, -2); sc.add(d2);
-  const hold = new THREE.Group();
-  sc.add(hold);
-  const gltf = await new Promise((res, rej) => {
-    new GLTFLoader().parse(trackAssets.glbBuf.slice(0), '', res, rej);
-  });
-  const model = gltf.scene;
-  model.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
-  });
-  const bb = new THREE.Box3().setFromObject(model);
-  const size = bb.getSize(new THREE.Vector3());
-  const center = bb.getCenter(new THREE.Vector3());
-  const s = 0.95 / Math.max(size.x, size.y, size.z, 1e-6);
-  model.position.set(-center.x * s, -center.y * s, -center.z * s);
-  model.scale.setScalar(s);
-  hold.add(model);
-  hold.rotation.set(0.35, -0.55, 0);
-  const resize = () => {
-    const w = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
-    r.setSize(w, h, false);
-    cam.aspect = w / h;
-    cam.updateProjectionMatrix();
-    layoutTrackSim();
-  };
-  resize();
-  const ro = new ResizeObserver(resize);
-  ro.observe(box);
-  const sim = { kind: 'fallback', renderer: r, scene: sc, camera: cam, hold, model, canvas: cnv, ro, raf: 0 };
-  const loop = () => { sim.raf = requestAnimationFrame(loop); r.render(sc, cam); };
-  loop();
-  trackSim = sim;
-  state.trackSimKind = 'fallback';
-  bindSimPointer(cnv, hold);
-  applyFallbackItem(state.trackItemIndex || 0);
-}
-
 async function stopCardSimulate({ keepSession = true, skipHud = false } = {}) {
   unbindSimPointer();
-  if (trackSim?.kind === 'ar') detachArSim();
-  if (trackSim?.kind === 'fallback') disposeFallbackSim();
+  detachHostGlFromSim();
+  stopSimBackgroundVideo();
   trackSim = null;
+  const wasSim = state.trackSim;
   state.trackSim = false;
   state.trackSimKind = null;
   document.body.classList.remove('track-sim');
   setTrackHudOpen(false, { autoHide: false });
   const btn = $('#trackSimBtn');
   if (btn) { btn.disabled = false; btn.textContent = '模擬卡片'; }
+  if (state.appMode === 'track') {
+    try { renderer.setAnimationLoop(null); } catch {}
+  }
   if (skipHud) return;
   const hint = $('#trackLabel .hint');
-  if (keepSession && trackSession && state.trackOn) {
+  if (hint) hint.textContent = '轉動卡片約 45°，或輕觸畫面切換';
+  if (keepSession && wasSim && state.appMode === 'track') {
     document.body.classList.add('searching');
     document.body.classList.remove('found');
-    if (hint) hint.textContent = '轉動卡片約 45°，或輕觸畫面切換';
     setTrackStatus('已結束模擬。請將後鏡頭對準卡片，或再按「模擬卡片」。');
+    if (state.trackCamAllowed || state.camPermitted) {
+      try { await startTrackSession(); } catch {}
+    }
   } else {
     resetTrackHud();
     setTrackStatus(trackAssets ? '資源已就緒。可開啟相機，或按「模擬卡片」直接看模型。' : '');
@@ -2084,31 +2150,35 @@ async function startCardSimulate() {
   if (btn) { btn.disabled = true; btn.textContent = '載入中…'; }
   try {
     setTrackStatus('正在載入模擬模型…');
-    await loadTrackModule();
-    await preloadTrack();
-    if (!trackAssets) throw new Error('資源尚未就緒');
-    if (!(trackSession && state.trackOn)) {
-      try { await startTrackSession(); } catch {}
+    if (!modelRoot) throw new Error('主模型尚未就緒');
+    // 停掉 MindAR，避免 iPhone 第二個 WebGL 把模型畫成空白
+    if (trackSession) {
+      await stopTrackSession({ resetHud: false });
+      if (isIOS) await new Promise((r) => setTimeout(r, 350));
     }
-    if (trackSession && state.trackOn) startArSimulate();
-    else await startFallbackSimulate();
-    state.trackSim = true;
-    document.body.classList.add('track-sim', 'found');
+    cleanTrackArExtras();
+    document.body.classList.add('track-sim', 'found', 'mode-track');
     document.body.classList.remove('searching', 'track-error');
     $('#trackIntro')?.classList.add('hide');
+    const hasCam = await startSimBackgroundVideo();
+    attachHostGlForSim();
+    state.trackSim = true;
+    state.trackSimKind = 'host';
+    trackSim = { kind: 'host' };
+    state.tYaw = YAW0; state.tPitch = PITCH0; state.tZoom = 1;
+    state.yaw = YAW0; state.pitch = PITCH0; state.zoom = 1;
+    applyHostSimItem(state.trackItemIndex || 0);
+    renderer.setAnimationLoop(frame);
     if (btn) { btn.disabled = false; btn.textContent = '結束模擬'; }
     const hint = $('#trackLabel .hint');
     if (hint) hint.textContent = '拖曳旋轉、捏合縮放；點圓點或左右切換零件';
-    setTrackItem(state.trackItemIndex || 0);
     setTrackHudOpen(true);
-    requestAnimationFrame(() => layoutTrackSim());
-    const bg = trackSim?.kind === 'ar' ? '後鏡頭當背景' : '無相機，深色背景';
-    setTrackStatus('模擬卡片：模型已載入（' + bg + '）。可切換 8 個項目，再按一次即可結束。');
+    requestAnimationFrame(() => { layoutTrackSim(); countSimMeshes(); });
+    setTrackStatus('模擬卡片：模型已載入（' + (hasCam ? '後鏡頭當背景' : '無相機，深色背景') + '）。可切換 8 個項目，再按一次即可結束。');
   } catch (e) {
     console.warn(e);
-    unbindSimPointer();
-    if (trackSim?.kind === 'ar') detachArSim();
-    if (trackSim?.kind === 'fallback') disposeFallbackSim();
+    try { detachHostGlFromSim(); } catch {}
+    stopSimBackgroundVideo();
     trackSim = null;
     state.trackSim = false;
     state.trackSimKind = null;
@@ -2397,18 +2467,20 @@ async function startTrackSession() {
   }
 }
 
-async function stopTrackSession() {
-  if (state.trackSim || trackSim) {
+async function stopTrackSession({ resetHud = true } = {}) {
+  if (resetHud && (state.trackSim || trackSim)) {
     await stopCardSimulate({ keepSession: false, skipHud: true });
   }
   const sess = trackSession;
   trackSession = null;
   state.trackOn = false;
   state.trackFound = false;
-  document.body.classList.remove('searching', 'found', 'track-sim');
+  if (resetHud) document.body.classList.remove('searching', 'found', 'track-sim');
+  else document.body.classList.remove('searching', 'found');
   try { if (sess) await sess.stop(); }
   catch (e) { try { await trackMod?.stop?.(); } catch (e2) { console.warn(e2); } }
-  resetTrackHud();
+  cleanTrackArExtras();
+  if (resetHud) resetTrackHud();
 }
 
 async function enterTrackMode() {

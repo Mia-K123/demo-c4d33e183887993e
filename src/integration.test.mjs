@@ -299,7 +299,7 @@ try {
     await p.close();
   }
 
-  await withPage(browser, base + '?mode=track&auto=touch', async (p) => {
+  await withPage(browser, base + '?mode=track&auto=touch&debug=1', async (p) => {
     await p.waitForFunction(() => window.__demo?.modelReady && window.__demo?.appMode === 'track', { timeout: 60000 });
     await p.waitForFunction(() => document.querySelector('#trackStart') && !document.querySelector('#trackStart').disabled, { timeout: 90000 });
     const info = await p.evaluate(() => ({
@@ -385,7 +385,23 @@ try {
         return __demo.trackSimKind;
       })(),
     }));
-    ok('模擬卡片 shows model and 結束模擬', sim.on && sim.cls && sim.btn.includes('結束模擬') && sim.introHidden && (sim.kind === 'ar' || sim.kind === 'fallback'), sim);
+    const host = await p.evaluate(() => {
+      const gl = document.querySelector('#gl');
+      const cs = gl && getComputedStyle(gl);
+      return {
+        kind: __demo.trackSimKind,
+        parent: gl?.parentElement?.id || '',
+        display: cs?.display,
+        vis: cs?.visibility,
+        w: gl?.clientWidth || 0,
+        h: gl?.clientHeight || 0,
+        meshes: __demo.simMeshCount || 0,
+        debug: document.querySelector('#gdebug')?.textContent || '',
+      };
+    });
+    ok('模擬卡片 shows model and 結束模擬', sim.on && sim.cls && sim.btn.includes('結束模擬') && sim.introHidden && host.kind === 'host', { sim, host });
+    ok('simulate uses host #gl over the track view', host.parent === 'trackAr' && host.display === 'block' && host.vis === 'visible' && host.w > 100 && host.h > 100 && host.meshes > 0, host);
+    ok('debug overlay reports canvas/meshes/frames', /sim canv=\d+x\d+/.test(host.debug) && /meshes=\d+/.test(host.debug) && /frames=\d+/.test(host.debug), host.debug);
     ok('模擬卡片 has 8 switchable pips + prev/next', sim.pips === 8 && sim.nav && sim.name === '整機', sim);
     await p.click('#trackNext');
     await sleep(300);
@@ -441,6 +457,20 @@ try {
     const left = await p.evaluate(() => ({ mode: __demo.appMode, trackOn: !!__demo.trackOn, sim: !!__demo.trackSim }));
     ok('leaving track stops session', left.mode === 'demo' && left.trackOn === false && left.sim === false, left);
   });
+
+  const html = await fetch(base).then((r) => r.text());
+  const appVer = html.match(/src="\.\/(app\.[a-f0-9]{8}\.js)"/);
+  const cssVer = html.match(/href="\.\/(styles\.[a-f0-9]{8}\.css)"/);
+  ok('index.html loads versioned app.js', !!appVer, appVer && appVer[1]);
+  ok('index.html loads versioned styles.css', !!cssVer, cssVer && cssVer[1]);
+  if (appVer) {
+    const aj = await fetch(base + appVer[1]).then((r) => r.status);
+    ok('versioned app.js 200', aj === 200, aj);
+  }
+  if (cssVer) {
+    const cs = await fetch(base + cssVer[1]).then((r) => r.status);
+    ok('versioned styles.css 200', cs === 200, cs);
+  }
 
   const card = await fetch(base + 'track/card.html').then((r) => ({ status: r.status, len: +r.headers.get('content-length') || 0 }));
   ok('track/card.html 200', card.status === 200, card);
