@@ -1,0 +1,374 @@
+{
+ "objects": {
+  "chassis-1": {
+   "group": "chassis",
+   "offset": [
+    0.0,
+    -0.1,
+    -0.0
+   ]
+  },
+  "bezel-1": {
+   "group": "bezel",
+   "offset": [
+    0.0,
+    0.0,
+    0.1
+   ]
+  },
+  "drive-01": {
+   "group": "drive",
+   "offset": [
+    -0.0525,
+    -0.06,
+    0.24
+   ]
+  },
+  "drive-02": {
+   "group": "drive",
+   "offset": [
+    -0.0175,
+    -0.06,
+    0.24
+   ]
+  },
+  "drive-03": {
+   "group": "drive",
+   "offset": [
+    0.0175,
+    -0.06,
+    0.24
+   ]
+  },
+  "drive-04": {
+   "group": "drive",
+   "offset": [
+    0.0525,
+    -0.06,
+    0.24
+   ]
+  },
+  "drive-05": {
+   "group": "drive",
+   "offset": [
+    -0.0525,
+    -0.03,
+    0.24
+   ]
+  },
+  "drive-06": {
+   "group": "drive",
+   "offset": [
+    -0.0175,
+    -0.03,
+    0.24
+   ]
+  },
+  "drive-07": {
+   "group": "drive",
+   "offset": [
+    0.0175,
+    -0.03,
+    0.24
+   ]
+  },
+  "drive-08": {
+   "group": "drive",
+   "offset": [
+    0.0525,
+    -0.03,
+    0.24
+   ]
+  },
+  "drive-09": {
+   "group": "drive",
+   "offset": [
+    -0.0525,
+    0.0,
+    0.24
+   ]
+  },
+  "drive-10": {
+   "group": "drive",
+   "offset": [
+    -0.0175,
+    0.0,
+    0.24
+   ]
+  },
+  "drive-11": {
+   "group": "drive",
+   "offset": [
+    0.0175,
+    0.0,
+    0.24
+   ]
+  },
+  "drive-12": {
+   "group": "drive",
+   "offset": [
+    0.0525,
+    0.0,
+    0.24
+   ]
+  },
+  "fan-1": {
+   "group": "fan",
+   "offset": [
+    0.0,
+    0.17,
+    0.1
+   ]
+  },
+  "fan-2": {
+   "group": "fan",
+   "offset": [
+    0.0,
+    0.182,
+    0.1
+   ]
+  },
+  "fan-3": {
+   "group": "fan",
+   "offset": [
+    0.0,
+    0.194,
+    0.1
+   ]
+  },
+  "fan-4": {
+   "group": "fan",
+   "offset": [
+    0.0,
+    0.206,
+    0.1
+   ]
+  },
+  "board-1": {
+   "group": "board",
+   "offset": [
+    0.0,
+    0.0,
+    -0.0
+   ]
+  },
+  "ram-01": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-02": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-03": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-04": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-05": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-06": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-07": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-08": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-09": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-10": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-11": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-12": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-13": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-14": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-15": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "ram-16": {
+   "group": "ram",
+   "offset": [
+    0.0,
+    0.11,
+    -0.0
+   ]
+  },
+  "cpu-1": {
+   "group": "cpu",
+   "offset": [
+    0.0,
+    0.21,
+    -0.0
+   ]
+  },
+  "cpu-2": {
+   "group": "cpu",
+   "offset": [
+    0.0,
+    0.21,
+    -0.0
+   ]
+  },
+  "psu-1": {
+   "group": "psu",
+   "offset": [
+    0.07,
+    0.0,
+    -0.24
+   ]
+  },
+  "psu-2": {
+   "group": "psu",
+   "offset": [
+    0.07,
+    0.035,
+    -0.24
+   ]
+  },
+  "pcie-1": {
+   "group": "pcie",
+   "offset": [
+    -0.05,
+    0.13,
+    -0.3
+   ]
+  },
+  "cover-1": {
+   "group": "cover",
+   "offset": [
+    0.0,
+    0.43,
+    -0.04
+   ]
+  }
+ },
+ "groups": {
+  "cover": {
+   "zh": "上蓋",
+   "en": "Top Cover"
+  },
+  "chassis": {
+   "zh": "機箱",
+   "en": "Chassis"
+  },
+  "bezel": {
+   "zh": "前面板",
+   "en": "Front Bezel"
+  },
+  "drive": {
+   "zh": "熱插拔硬碟 ×12",
+   "en": "3.5\" Hot-swap"
+  },
+  "board": {
+   "zh": "主機板",
+   "en": "Motherboard"
+  },
+  "cpu": {
+   "zh": "CPU 散熱器 ×2",
+   "en": "Heatsink"
+  },
+  "ram": {
+   "zh": "記憶體 DIMM ×16",
+   "en": "DDR5 RDIMM"
+  },
+  "fan": {
+   "zh": "風扇牆 ×4",
+   "en": "80mm Fans"
+  },
+  "psu": {
+   "zh": "電源供應器 ×2",
+   "en": "Redundant PSU"
+  },
+  "pcie": {
+   "zh": "PCIe 擴充卡",
+   "en": "NIC Card"
+  }
+ }
+}

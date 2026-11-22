@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>設備識別 QR · 列印頁</title>
+<style>
+  :root { --ink: #0b0f16; --muted: #4c5a6a; --line: #d7dee8; --acc: #0f8f7d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: #f4f6f8;
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; }
+  header { max-width: 900px; margin: 0 auto; padding: 32px 24px 8px; }
+  h1 { margin: 0 0 6px; font-size: 26px; }
+  .lead { margin: 0; color: var(--muted); line-height: 1.55; }
+  .toolbar { max-width: 900px; margin: 16px auto 0; padding: 0 24px; display: flex; gap: 8px; }
+  button, a.btn { appearance: none; border: 1px solid var(--line); background: #fff; color: inherit;
+    border-radius: 999px; padding: 8px 14px; font: inherit; font-weight: 650; cursor: pointer; text-decoration: none; }
+  button.primary { background: var(--acc); color: #fff; border-color: var(--acc); }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 24px 48px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 20px; text-align: center; }
+  .card h2 { margin: 0 0 4px; font-size: 18px; }
+  .card .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; color: var(--acc); letter-spacing: .04em; }
+  .card img { width: min(280px, 100%); height: auto; margin: 16px 0; background: #fff; }
+  .card p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+  .cut { border: 1.5px dashed #9aa8b8; }
+  footer { max-width: 900px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  @media print {
+    body { background: #fff; }
+    .toolbar, a.back { display: none !important; }
+    header, footer { padding-left: 0; padding-right: 0; }
+    main { padding: 12px 0; gap: 16px; }
+    .card { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <p class="lead"><a class="back" href="index.html">← 回到組裝教學</a></p>
+  <h1>設備識別 QR 列印頁</h1>
+  <p class="lead">將代碼貼在示範機箱或工作站上。用組裝教學頁的「掃描設備」對準即可載入對應流程。兩個代碼都會開啟同一套簡化的 2U／L11 組裝步驟，用來示範「掃到不同設備、載入對應教學」的概念。</p>
+</header>
+<div class="toolbar">
+  <button class="primary" type="button" onclick="print()">列印此頁</button>
+  <a class="btn" href="qrcodes/SRV-2U-DEMO.png" download>下載 SRV-2U-DEMO</a>
+  <a class="btn" href="qrcodes/RACK-L11-DEMO.png" download>下載 RACK-L11-DEMO</a>
+</div>
+<main>
+  <article class="card cut">
+    <h2>2U 示範伺服器</h2>
+    <div class="code">SRV-2U-DEMO</div>
+    <img src="qrcodes/SRV-2U-DEMO.png" alt="QR 代碼 SRV-2U-DEMO" width="512" height="512">
+    <p>內容為純文字 <strong>SRV-2U-DEMO</strong>。<br>請沿虛線剪下，貼於機箱外殼或工單。</p>
+  </article>
+  <article class="card cut">
+    <h2>L11 機櫃示範單元</h2>
+    <div class="code">RACK-L11-DEMO</div>
+    <img src="qrcodes/RACK-L11-DEMO.png" alt="QR 代碼 RACK-L11-DEMO" width="512" height="512">
+    <p>內容為純文字 <strong>RACK-L11-DEMO</strong>。<br>掃描後會載入同一套簡化教學，標題改為本單元名稱。</p>
+  </article>
+</main>
+<footer>
+  本 QR 僅供組裝教學示範使用，不是實機序號。未知代碼會在掃描頁顯示提示，不會載入錯誤的步驟。
+</footer>
+</body>
+</html>

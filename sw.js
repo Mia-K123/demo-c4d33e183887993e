@@ -19,7 +19,9 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   let url;
   try { url = new URL(req.url); } catch { return; }
-  if (url.origin !== self.location.origin || !HINT.test(url.pathname)) return;
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.includes('/assembly/')) return; // 子路徑頁面自行載入，避免根目錄 SW 干預
+  if (!HINT.test(url.pathname)) return;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(req, { ignoreSearch: true }) || await cache.match(url.href);
