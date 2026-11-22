@@ -34,6 +34,13 @@
   #gesture { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 58px); display: flex; align-items: center; gap: 8px;
     padding: 7px 14px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); font-size: 13.5px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); max-width: 92vw; white-space: nowrap; }
   #gico { font-size: 18px; }
+  #gicoWrap { position: relative; width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; }
+  #gRing { position: absolute; left: 50%; top: 50%; width: 36px; height: 36px; transform: translate(-50%, -50%) rotate(-90deg); pointer-events: none; }
+  #gRing circle { fill: none; stroke-width: 2.6; }
+  .gring-bg { stroke: rgba(255,255,255,.22); }
+  .gring-fg { stroke: #7ad0ff; stroke-linecap: round; stroke-dasharray: 0 100; }
+  #gesture.charging .gring-fg { stroke: #5ee0a0; }
+  #gesture.charging { box-shadow: 0 0 0 1px rgba(94,224,160,.35); }
   #pip { position: fixed; right: 12px; top: calc(env(safe-area-inset-top) + 104px); width: 96px; height: 72px; border-radius: 10px;
     background: rgba(0,0,0,.35); border: 1px solid var(--line); display: none; overflow: hidden; z-index: 3; }
   body.cam #pip { display: block; }
@@ -109,7 +116,16 @@
   <button id="btnHelp" class="iconbtn" title="操作說明">?</button>
   <a class="iconbtn" href="assembly/" title="組裝教學" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">組裝</a>
 </header>
-<div id="gesture"><span id="gico">✋</span><span id="gtxt">準備中…</span></div>
+<div id="gesture">
+  <span id="gicoWrap">
+    <svg id="gRing" viewBox="0 0 36 36" aria-hidden="true">
+      <circle class="gring-bg" cx="18" cy="18" r="15" pathLength="100"></circle>
+      <circle id="gRingFg" class="gring-fg" cx="18" cy="18" r="15" pathLength="100" stroke-dasharray="0 100"></circle>
+    </svg>
+    <span id="gico">✋</span>
+  </span>
+  <span id="gtxt">準備中…</span>
+</div>
 <p id="camHint"></p>
 <div id="modeSheet" role="menu">
   <button type="button" data-mode="single" role="menuitem">前鏡頭手勢</button>
@@ -122,10 +138,10 @@
 <div id="help">
   <h3>操作方式</h3>
   <table>
-    <tr><td>🖐️</td><td><b>張開手掌</b>：零件分層展開</td></tr>
-    <tr><td>✊</td><td><b>握拳</b>：收合回伺服器</td></tr>
+    <tr><td>👋</td><td><b>手左右／上下移動</b>：旋轉模型（張開或握拳移動都可以轉，不會觸發開合）</td></tr>
+    <tr><td>🖐️</td><td><b>張開手掌並靜止約半秒</b>：零件分層展開（會顯示進度環）</td></tr>
+    <tr><td>✊</td><td><b>握拳並靜止約半秒</b>：收合回伺服器</td></tr>
     <tr><td>🤏</td><td><b>拇指＋食指捏合</b>：張開放大、捏緊縮小</td></tr>
-    <tr><td>👋</td><td><b>手左右／上下移動</b>：旋轉模型</td></tr>
     <tr><td>👆</td><td><b>沒有相機時</b>：單指拖曳旋轉、雙指縮放、點兩下展開／收合</td></tr>
   </table>
   <div class="sub">手離鏡頭約 40–70 公分、光線充足時最準。相機畫面只在你的手機上處理，不會上傳。<br>右上「🎥 鏡頭模式」可選「前鏡頭手勢」或「雙鏡頭（前控制、後背景）」：雙手用前置追蹤，產品疊在後置實景上；若裝置無法同時開兩顆鏡頭，會先拍一張後置當背景，可按「📷 重拍背景」更新。<br>右上「AR」：Quest 與安卓可把伺服器放到真實桌上；iPhone 會開啟 Quick Look。展開時會播放背景音樂，可按「🔊 開啟音效」解鎖或開關。</div>
@@ -138,7 +154,7 @@
   <div class="card">
     <div style="font-size:40px">🖐️</div>
     <h2>用手勢拆解伺服器</h2>
-    <p>開啟相機後，對著鏡頭張開手掌，伺服器就會一層層展開；握拳就收合。也可選雙鏡頭：前置控制手勢，後置當真實背景。</p>
+    <p>開啟相機後，手左右移動即可旋轉模型。張開手掌或握拳並靜止約半秒，才會展開或收合。也可選雙鏡頭：前置控制手勢，後置當真實背景。</p>
     <button id="startCam" class="btn primary">開啟相機，用手勢玩</button>
     <button id="startDual" class="btn">雙鏡頭：前控制、後背景</button>
     <button id="startTouch" class="btn">不用相機，用手指操作</button>

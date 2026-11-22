@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+import { createGestureMachine, classifyPose } from './gestures.mjs';
 
 const $ = (s) => document.querySelector(s);
 const rel = (p) => new URL(p, document.baseURI).href;   // 所有路徑相對於本頁，可放在任何子路徑
@@ -1082,7 +1083,7 @@ async function startCamera() {
   setTrackSource(video);
   state.camOn = true;
   ignoreGesturesUntil = performance.now() + 800;
-  stable = { g: 'none', n: 0 };
+  gesture.reset();
   persistCam();
   await refreshVideoInputs();
   if (!st.facingMode && state.deviceId) {
@@ -1117,7 +1118,7 @@ async function startDualStill(existingRear) {
   setTrackSource(videoFront);
   state.camOn = true;
   ignoreGesturesUntil = performance.now() + 800;
-  stable = { g: 'none', n: 0 };
+  gesture.reset();
   persistCam();
   await refreshVideoInputs();
   updateCamUI();
@@ -1175,7 +1176,7 @@ async function startDualCamera() {
     setTrackSource(videoFront);
     state.camOn = true;
     ignoreGesturesUntil = performance.now() + 800;
-    stable = { g: 'none', n: 0 };
+    gesture.reset();
     persistCam();
     await refreshVideoInputs();
     updateCamUI();
@@ -1338,52 +1339,64 @@ state.debugCam = () => ({
   bodyStill: document.body.classList.contains('dual-still'),
 });
 
-// 手勢判斷
-const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-function classify(lm) {
-  const size = D(lm[0], lm[9]) || 1e-3;
-  const ext = [[8, 6], [12, 10], [16, 14], [20, 18]].map(([t, p]) => D(lm[t], lm[0]) > D(lm[p], lm[0]) * 1.12);
-  const nExt = ext.filter(Boolean).length; const pinchD = D(lm[4], lm[8]) / size;
-  const thumbOut = D(lm[4], lm[17]) / size > 0.9;
-  if (nExt >= 4 && thumbOut && pinchD > 0.5) return { g: 'open', pinchD };
-  const idxOut = D(lm[8], lm[0]) > D(lm[5], lm[0]) * 1.1;
-  const othersCurled = !ext[1] && !ext[2] && !ext[3];
-  if (othersCurled && idxOut) return { g: 'pinch', pinchD };            // 只伸拇指和食指：捏合縮放
-  if (othersCurled) return { g: 'fist', pinchD };
-  return { g: 'move', pinchD };
+// 手勢判斷（旋轉與開合分開的狀態機，邏輯在 gestures.mjs）
+const gesture = createGestureMachine();
+state.gestureMachine = gesture;
+state.classify = (lm) => classifyPose(lm).g;
+
+function updateChargeUI(r) {
+  const el = $('#gesture');
+  const fg = $('#gRingFg');
+  if (!el || !fg) return;
+  const on = !!(r && r.charge > 0.03 && r.chargeLabel);
+  el.classList.toggle('charging', on);
+  const pct = on ? Math.max(0, Math.min(100, r.charge * 100)) : 0;
+  fg.setAttribute('stroke-dasharray', `${pct} 100`);
 }
-state.classify = (lm) => classify(lm).g;
-let stable = { g: 'none', n: 0 }, prevPalm = null, pinchRef = null;
+
 function detect(now) {
   if (ar.session || renderer.xr.isPresenting) return; // AR 進行中暫停手勢相機推論
   const src = trackVideo || video;
   if (!landmarker || !src || src.readyState < 2 || now - lastDetect < 33) return;
   if (src.currentTime === lastVideoTime) return; lastVideoTime = src.currentTime; lastDetect = now;
   let res; try { res = landmarker.detectForVideo(src, now); } catch (e) { console.warn(e); return; }
-  const lm = res.landmarks?.[0]; drawHand(lm);
-  if (!lm) { stable = { g: 'none', n: 0 }; prevPalm = null; pinchRef = null; setStatus('none'); return; }
-  const mirror = state.camMode === 'dual' || state.facing === 'user';
-  const palm = { x: (lm[0].x + lm[5].x + lm[17].x) / 3, y: (lm[0].y + lm[5].y + lm[17].y) / 3 };
-  if (mirror) palm.x = 1 - palm.x;
-  const c = classify(lm);
-  stable = c.g === stable.g ? { g: c.g, n: stable.n + 1 } : { g: c.g, n: 1 };
-  const g = stable.n >= 3 ? stable.g : state.gesture;
-  if (now < ignoreGesturesUntil) { prevPalm = palm; setStatus(c.g); return; }
-  if (g === 'open') setTarget(1); else if (g === 'fist') setTarget(0);
-  if (g === 'pinch') { // 拇指–食指距離 → 縮放（相對於開始捏的那一刻）
-    if (!pinchRef) pinchRef = { d: Math.max(0.15, c.pinchD), z: state.tZoom };
-    state.tZoom = clampZ(pinchRef.z * Math.pow(Math.max(0.05, c.pinchD) / pinchRef.d, 0.9));
-  } else pinchRef = null;
-  if (prevPalm && g !== 'pinch') {   // 手左右移動 → 轉；上下移動 → 俯仰
-    const dx = palm.x - prevPalm.x, dy = palm.y - prevPalm.y;
-    if (Math.abs(dx) > 0.004) state.tYaw += dx * 5.5;
-    if (Math.abs(dy) > 0.004) state.tPitch = clampP(state.tPitch + dy * 3.5);
-  }
-  prevPalm = palm; setStatus(g);
+  const lm = res.landmarks?.[0];
+  drawHand(lm);
+  const mirrored = state.camMode === 'dual' || state.facing === 'user';
+  const r = gesture.update({
+    now, landmarks: lm || null, mirrored,
+    ignore: now < ignoreGesturesUntil,
+    zoom: state.tZoom, clampZ,
+  });
+  state.tYaw += r.dYaw;
+  state.tPitch = clampP(state.tPitch + r.dPitch);
+  if (r.status === 'pinch') state.tZoom = r.zoom;
+  if (r.triggered === 'explode') setTarget(1);
+  else if (r.triggered === 'collapse') setTarget(0);
+  updateChargeUI(r);
+  setStatus(r.status);
+  state.gSpeed = r.speed;
+  state.gCharge = r.charge;
 }
-const GEST = { none: ['✋', '請把手放進畫面'], open: ['🖐️', '張開手：展開'], fist: ['✊', '握拳：收合'], pinch: ['🤏', '捏合：縮放'],
-  move: ['👋', '移動手：旋轉'], nocam: ['👆', '觸控模式：拖曳旋轉・雙指縮放・點兩下展開'] };
-function setStatus(g) { if (state.gesture === g && g !== 'nocam') return; state.gesture = g; const [i, t] = GEST[g]; $('#gico').textContent = i; $('#gtxt').textContent = t; }
+
+const GEST = {
+  none: ['✋', '請把手放進畫面'],
+  open: ['🖐️', '張開手並靜止：展開'],
+  fist: ['✊', '握拳並靜止：收合'],
+  pinch: ['🤏', '捏合：縮放'],
+  move: ['👋', '左右移動：旋轉'],
+  chargeOpen: ['🖐️', '展開'],
+  chargeFist: ['✊', '收合'],
+  nocam: ['👆', '觸控模式：拖曳旋轉・雙指縮放・點兩下展開'],
+};
+function setStatus(g) {
+  const key = GEST[g] ? g : 'none';
+  if (state.gesture === key && key !== 'nocam' && key !== 'chargeOpen' && key !== 'chargeFist') return;
+  state.gesture = key;
+  const [i, t] = GEST[key];
+  $('#gico').textContent = i;
+  $('#gtxt').textContent = t;
+}
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
 function drawHand(lm) {
   const w = hud.width, h = hud.height; hctx.clearRect(0, 0, w, h);
