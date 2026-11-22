@@ -60,15 +60,18 @@
     font-size: 13.5px; text-align: left; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
   #modeSheet button[aria-current="true"] { background: rgba(58,160,255,.22); }
   #modeSheet button:active { background: rgba(255,255,255,.08); }
+  .header-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; pointer-events: auto; }
   .iconbtn { pointer-events: auto; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); color: #fff;
-    font-size: 18px; display: grid; place-items: center; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); text-decoration: none; cursor: pointer; }
+    font-size: 18px; display: inline-flex; align-items: center; justify-content: center; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); text-decoration: none; cursor: pointer; white-space: nowrap; box-sizing: border-box; padding: 0; }
   .iconbtn img { display: none; } #btnAR { font-size: 13px; font-weight: 700; width: auto; padding: 0 10px; }
   footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 14px calc(env(safe-area-inset-bottom) + 14px); display: flex; gap: 10px; justify-content: center; }
   .btn { flex: 1; max-width: 200px; height: 50px; border-radius: 16px; border: 1px solid var(--line); background: var(--glass); color: #fff; font-size: 16px; font-weight: 600;
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); cursor: pointer; font-family: inherit; }
   .btn.primary { background: linear-gradient(180deg, #3aa0ff, #1f6fd1); border-color: transparent; }
   .btn.primary.on { background: linear-gradient(180deg, #ff9a3a, #e2631c); }
-  .btn.small { flex: 0 0 auto; width: 64px; font-size: 14px; }
+  .btn.small { flex: 0 1 auto; width: auto; min-width: 0; height: 36px; padding: 0 10px; font-size: 13px; font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; }
+  .file-btn { margin: 0; cursor: pointer; }
   #help { position: fixed; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 76px); padding: 14px 16px; border-radius: 18px; background: rgba(12,18,28,.88);
     border: 1px solid var(--line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 14px; line-height: 1.5; transform: translateY(20px); opacity: 0; pointer-events: none; transition: .25s; max-width: 460px; margin: 0 auto; }
   #help.show { transform: none; opacity: 1; pointer-events: auto; }
@@ -142,21 +145,27 @@
     align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
   body.mode-track.searching #trackScan { display: flex; }
   body.mode-track.track-sim #trackScan { display: none !important; }
-  body.mode-track.track-sim #trackLabel, body.mode-track.found #trackLabel { opacity: 1; transform: none; }
-  #trackActions { position: absolute; left: 8px; right: 8px; top: calc(env(safe-area-inset-top) + 50px);
-    z-index: 8; display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap;
+  body.mode-track header { display: none; }
+  body.mode-track #modeTabs { background: rgba(14,20,30,.4); }
+  body.mode-track #modeTabs button { padding: 5px 10px; font-size: 12px; }
+  #trackActions { position: absolute; left: 8px; right: 8px; top: calc(env(safe-area-inset-top) + 44px);
+    z-index: 8; display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: nowrap;
     pointer-events: auto; }
   #trackActions a, #trackActions button { appearance: none; display: inline-flex; align-items: center; justify-content: center;
-    height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line);
-    background: var(--glass); color: #fff; font: inherit; font-size: 13px; font-weight: 700;
+    height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.12);
+    background: rgba(14,20,30,.4); color: #fff; font: inherit; font-size: 12px; font-weight: 700;
     text-decoration: none; cursor: pointer; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     white-space: nowrap; }
-  #trackActions button.primary, #trackSimBtn.primary { background: linear-gradient(180deg, #3aa0ff, #1f6fd1); border-color: transparent; }
-  body.mode-track.track-sim #trackSimBtn { background: rgba(255,176,32,.2); border-color: rgba(255,176,32,.45); }
-  #trackStatus { position: absolute; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 92px);
-    z-index: 7; margin: 0; text-align: center; font-size: 13px; line-height: 1.45; color: #e8f0fa;
-    text-shadow: 0 1px 8px #000; pointer-events: none; min-height: 1.3em; }
-  #trackStatus.err { color: #ffd2a6; }
+  #trackActions button.primary, #trackSimBtn.primary { background: rgba(58,160,255,.55); border-color: rgba(58,160,255,.35); }
+  body.mode-track.track-sim #trackSimBtn { background: rgba(255,176,32,.28); border-color: rgba(255,176,32,.35); }
+  #trackStatus { position: absolute; left: 50%; top: calc(env(safe-area-inset-top) + 76px); transform: translateX(-50%);
+    z-index: 7; margin: 0; width: max-content; max-width: min(92vw, 420px); padding: 4px 10px; border-radius: 999px;
+    text-align: center; font-size: 11px; line-height: 1.35; color: #e8f0fa;
+    background: rgba(14,20,30,.4); border: 1px solid rgba(255,255,255,.1);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    text-shadow: 0 1px 6px #000; pointer-events: none; opacity: 1; transition: opacity .35s; }
+  #trackStatus:empty, #trackStatus.faded { opacity: 0; }
+  #trackStatus.err { color: #ffd2a6; opacity: 1; background: rgba(40,24,10,.55); }
   #trackRetry { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 96px);
     transform: translateX(-50%); z-index: 7; display: none; width: min(86vw, 360px); height: 52px;
     border: 0; border-radius: 16px; background: linear-gradient(180deg, #3aa0ff, #1f6fd1);
@@ -170,26 +179,35 @@
   .track-frame::after { bottom: -3px; right: -3px; border-left: 0; border-top: 0; border-radius: 0 0 8px 0; }
   #trackScan b { font-size: 15px; text-shadow: 0 1px 8px #000; }
   #trackScan span { font-size: 12px; color: #c9d4e4; text-shadow: 0 1px 8px #000; }
-  #trackHud { position: absolute; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 16px);
-    z-index: 4; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 10px; }
-  #trackNav, #trackPips, #trackLabel { pointer-events: auto; }
-  #trackNav { display: none; gap: 8px; }
-  body.mode-track.track-sim #trackNav, body.mode-track.found #trackNav { display: flex; }
-  #trackNav button { appearance: none; width: 44px; height: 36px; border-radius: 12px; border: 1px solid var(--line);
-    background: var(--glass); color: #fff; font: inherit; font-size: 18px; font-weight: 700; cursor: pointer; }
-  #trackLabel { max-width: 420px; width: 100%; padding: 12px 16px 14px; border-radius: 16px;
-    background: var(--glass); border: 1px solid var(--line);
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); text-align: center;
-    opacity: 0; transform: translateY(8px); transition: .25s; }
-  body.mode-track.found #trackLabel { opacity: 1; transform: none; }
-  #trackLabel .name { font-size: 18px; font-weight: 700; }
-  #trackLabel .spec { margin-top: 2px; font-size: 12.5px; color: #c5d2e4; }
-  #trackLabel .hint { margin-top: 6px; font-size: 11px; color: #8fa0b6; }
-  #trackPips { display: flex; gap: 6px; justify-content: center; }
-  #trackPips .pip { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 99px; background: transparent; cursor: pointer;
+  #trackHud { position: absolute; left: 10px; right: 10px; bottom: calc(env(safe-area-inset-bottom) + 10px);
+    z-index: 4; pointer-events: none; display: none; flex-direction: column; align-items: center; gap: 6px; }
+  body.mode-track.found #trackHud, body.mode-track.track-sim #trackHud { display: flex; }
+  #trackHudBar, #trackHudDetail, #trackNav, #trackPips, #trackLabel, #trackHudToggle { pointer-events: auto; }
+  #trackHudBar { display: flex; align-items: center; gap: 4px; width: min(100%, 420px);
+    padding: 3px; border-radius: 999px; background: rgba(14,20,30,.4); border: 1px solid rgba(255,255,255,.12);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  #trackHudBar > button { appearance: none; border: 0; background: transparent; color: #fff; font: inherit; cursor: pointer; }
+  #trackPrev, #trackNext { width: 32px; height: 28px; border-radius: 999px; font-size: 18px; font-weight: 700; flex: 0 0 auto; }
+  #trackHudToggle { flex: 1 1 auto; min-width: 0; height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-size: 13px; font-weight: 700; }
+  #trackHudToggle .hud-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #trackHudToggle .hud-chev { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid #d5deea; transition: transform .2s; }
+  body.track-hud-open #trackHudToggle .hud-chev { transform: rotate(180deg); }
+  #trackHudDetail { display: none; width: min(100%, 420px); flex-direction: column; align-items: center; gap: 6px; }
+  body.track-hud-open #trackHudDetail { display: flex; }
+  #trackNav { display: flex; gap: 6px; justify-content: center; }
+  #trackLabel { max-width: 420px; width: 100%; padding: 8px 12px 10px; border-radius: 14px;
+    background: rgba(14,20,30,.45); border: 1px solid rgba(255,255,255,.12);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); text-align: center; }
+  #trackLabel .name { font-size: 15px; font-weight: 700; }
+  #trackLabel .spec { margin-top: 2px; font-size: 12px; color: #c5d2e4; }
+  #trackLabel .hint { margin-top: 4px; font-size: 11px; color: #8fa0b6; }
+  #trackPips { display: flex; gap: 4px; justify-content: center; }
+  #trackPips .pip { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 99px; background: transparent; cursor: pointer;
     position: relative; }
-  #trackPips .pip::after { content: ""; position: absolute; inset: 7px; border-radius: 99px; background: rgba(255,255,255,.4); transition: .2s; }
-  #trackPips .pip.on::after { background: #e8ba4a; inset: 5px; }
+  #trackPips .pip::after { content: ""; position: absolute; inset: 6px; border-radius: 99px; background: rgba(255,255,255,.4); transition: .2s; }
+  #trackPips .pip.on::after { background: #e8ba4a; inset: 4px; }
   #trackIntro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px;
     background: rgba(6,9,14,.72); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
   #trackIntro.hide { display: none; }
@@ -234,6 +252,13 @@
     backdrop-filter: blur(16px); padding: 14px 16px 12px; }
   #asmCard .kicker { display: flex; align-items: center; justify-content: space-between; gap: 8px;
     font-size: 11px; letter-spacing: .08em; color: var(--asm-warn); font-weight: 700; }
+  #stepKicker { flex: 0 0 auto; white-space: nowrap; }
+  .kicker-actions, .ann-actions, #asmCard .card-nav { display: flex; align-items: stretch; gap: 6px; min-width: 0; flex: 1 1 auto; }
+  .kicker-actions .btn, .ann-actions .btn, #asmCard .card-nav .btn { flex: 1 1 0; width: auto; min-width: 0; height: 36px; padding: 0 8px; }
+  #asmCard .card-nav { margin-top: 8px; }
+  #asmCard .card-nav .complete { flex: 0 0 auto; margin-right: 0; white-space: nowrap; }
+  .ann-head { gap: 8px; }
+  .ann-actions { flex: 1 1 auto; }
   #asmCard h3 { margin: 4px 0 6px; font-size: 18px; font-weight: 750; }
   #asmCard .inst { margin: 0 0 10px; font-size: 13.5px; line-height: 1.55; color: #d5deea; }
   .tools { display: grid; gap: 6px; margin: 0 0 10px; }
@@ -276,13 +301,24 @@
   body.annotating #gl { cursor: crosshair; }
   body.mode-assembly.ar aside.sidebar, body.mode-assembly.ar #asmCard { display: none !important; }
   @media (max-width: 900px) {
+    header { padding: calc(env(safe-area-inset-top) + 48px) 10px 0 10px !important; gap: 6px; align-items: center; flex-wrap: nowrap; }
+    .title { min-width: 0; flex: 1 1 auto; }
+    .title h1 { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .title p { margin: 0; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .header-actions { gap: 4px; }
+    header .iconbtn { height: 32px; width: auto; min-width: 32px; padding: 0 8px; font-size: 12px; font-weight: 700; border-radius: 10px; }
+    #btnHelp { min-width: 32px; width: 32px; padding: 0; }
     #btnMenu, #btnSheet { display: inline-flex; }
     aside.sidebar { width: min(88vw, 340px); transform: translateX(-105%); transition: transform .28s; background: #141c28; pointer-events: auto; z-index: 9; }
     body.sidebar-open aside.sidebar { transform: none; }
-    #asmCard { left: 0; right: 0; width: auto; bottom: 0; border-radius: 18px 18px 0 0; max-height: 72dvh; overflow: auto; }
-    .sheet-handle { display: flex; justify-content: center; padding: 9px 0 4px; }
+    #asmCard { left: 0; right: 0; width: auto; bottom: 0; border-radius: 18px 18px 0 0; max-height: 40dvh; overflow: auto;
+      padding: 6px 12px calc(var(--safe-b) + 10px); }
+    body.sheet-expanded #asmCard { max-height: 40dvh; }
+    body.sheet-collapsed #asmCard { max-height: none; overflow: visible; }
+    .sheet-handle { display: flex; justify-content: center; padding: 6px 0 2px; }
     .sheet-handle i { width: 40px; height: 4px; border-radius: 99px; background: rgba(255,255,255,.32); }
     body.sheet-collapsed #sheetBody, body.sheet-collapsed .swipe-hint, body.sheet-collapsed #btnReplay { display: none; }
+    body.sheet-collapsed #asmCard h3 { margin: 2px 0 0; font-size: 15px; }
   }
 </style>
 </head>
@@ -295,15 +331,17 @@
 <div id="labels"></div>
 <header>
   <div class="title"><h1 id="docTitle">2U 機架式伺服器</h1><p><span id="deviceName">手勢互動 3D 爆炸圖展示</span> <span id="deviceCode" class="asm-only"></span></p></div>
-  <button id="btnSound" class="iconbtn" type="button" title="開啟音效">🔊 開啟音效</button>
-  <a id="btnAR" class="iconbtn" title="AR">AR</a>
-  <button id="btnMode" class="iconbtn" type="button" title="鏡頭模式" hidden>🎥 鏡頭模式</button>
-  <button id="btnFlip" class="iconbtn" type="button" title="切換鏡頭" hidden>🔄 切換鏡頭</button>
-  <button id="btnReshoot" class="iconbtn" type="button" title="重拍背景" hidden>📷 重拍背景</button>
-  <button id="btnHelp" class="iconbtn" title="操作說明">?</button>
-  <button id="btnScan" class="iconbtn asm-only" type="button" title="掃描設備" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">掃描</button>
-  <button id="btnResetAsm" class="iconbtn asm-only" type="button" title="重設進度" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">重設</button>
-  <a id="btnCard" class="iconbtn track-only" href="track/card.html" target="_blank" rel="noopener" title="列印卡片" style="width:auto;padding:0 10px;font-size:13px;font-weight:700">列印卡片</a>
+  <div class="header-actions">
+    <button id="btnSound" class="iconbtn" type="button" title="開啟音效">🔊 開啟音效</button>
+    <a id="btnAR" class="iconbtn" title="AR">AR</a>
+    <button id="btnMode" class="iconbtn" type="button" title="鏡頭模式" hidden>🎥 鏡頭模式</button>
+    <button id="btnFlip" class="iconbtn" type="button" title="切換鏡頭" hidden>🔄 切換鏡頭</button>
+    <button id="btnReshoot" class="iconbtn" type="button" title="重拍背景" hidden>📷 重拍背景</button>
+    <button id="btnHelp" class="iconbtn" title="操作說明">?</button>
+    <button id="btnScan" class="iconbtn asm-only" type="button" title="掃描設備">掃描</button>
+    <button id="btnResetAsm" class="iconbtn asm-only" type="button" title="重設進度">重設</button>
+    <a id="btnCard" class="iconbtn track-only" href="track/card.html" target="_blank" rel="noopener" title="列印卡片">列印卡片</a>
+  </div>
 </header>
 <nav id="modeTabs" role="tablist" aria-label="模式">
   <button type="button" data-app-mode="demo" aria-selected="true">展示</button>
@@ -375,15 +413,23 @@
     <span>沒有第二台裝置時，可按「模擬卡片」直接看模型。<a href="track/card.html" target="_blank" rel="noopener" style="color:#8ec8ff;pointer-events:auto">列印卡片／開啟卡片</a></span>
   </div>
   <div id="trackHud">
-    <div id="trackNav">
+    <div id="trackHudBar">
       <button type="button" id="trackPrev" aria-label="上一項">‹</button>
-      <div id="trackPips" aria-hidden="true"></div>
+      <button type="button" id="trackHudToggle" aria-expanded="false" aria-controls="trackHudDetail">
+        <span class="hud-name">整機</span>
+        <span class="hud-chev" aria-hidden="true"></span>
+      </button>
       <button type="button" id="trackNext" aria-label="下一項">›</button>
     </div>
-    <div id="trackLabel">
-      <div class="name">整機</div>
-      <div class="spec">2U 機架式伺服器（示例）</div>
-      <div class="hint">轉動卡片約 45°，或輕觸畫面切換</div>
+    <div id="trackHudDetail">
+      <div id="trackNav">
+        <div id="trackPips" aria-hidden="true"></div>
+      </div>
+      <div id="trackLabel">
+        <div class="name">整機</div>
+        <div class="spec">2U 機架式伺服器（示例）</div>
+        <div class="hint">轉動卡片約 45°，或輕觸畫面切換</div>
+      </div>
     </div>
   </div>
   <div id="trackIntro">
@@ -410,7 +456,7 @@
   <div class="sheet-handle" id="sheetHandle"><i></i></div>
   <div class="kicker">
     <span id="stepKicker">步驟 1／10</span>
-    <div>
+    <div class="kicker-actions">
       <button class="btn small" id="btnMenu" type="button">☰ 步驟</button>
       <button class="btn small" id="btnReplay" type="button">重播動畫</button>
       <button class="btn small" id="btnSheet" type="button">說明</button>
@@ -424,7 +470,7 @@
     <div class="ann-sec">
       <div class="ann-head">
         <h4>本步驟標註</h4>
-        <div>
+        <div class="ann-actions">
           <button class="btn small" id="btnAnnotate" type="button">新增</button>
           <button class="btn small" id="btnAnnExport" type="button">匯出</button>
           <label class="btn small file-btn">匯入<input type="file" id="annFile" accept="application/json,.json"></label>

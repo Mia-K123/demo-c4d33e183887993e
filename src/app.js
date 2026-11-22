@@ -1722,6 +1722,8 @@ function resetTrackHud() {
   const start = $('#trackStart'); if (start) { start.disabled = !trackAssets; start.textContent = '開啟相機'; }
   const name = $('#trackLabel .name'); if (name) name.textContent = '整機';
   const spec = $('#trackLabel .spec'); if (spec) spec.textContent = '2U 機架式伺服器（示例）';
+  const hudName = $('#trackHudToggle .hud-name'); if (hudName) hudName.textContent = '整機';
+  setTrackHudOpen(false, { autoHide: false });
   if (trackAssets) updateTrackProgress(1, 'ready');
   else if (state.trackPreloadStatus === 'load') updateTrackProgress((state.trackPreloadPct || 0) / 100, 'load');
   syncTrackPips(0);
@@ -1756,14 +1758,81 @@ function setTrackItem(index) {
   if (trackSession?.setIndex) trackSession.setIndex(i);
   else {
     const item = items[i];
-    if (item) {
-      const name = $('#trackLabel .name'); if (name) name.textContent = item.zh;
-      const spec = $('#trackLabel .spec'); if (spec) spec.textContent = item.spec || '';
-      state.trackItem = item.zh;
-    }
-    syncTrackPips(i);
+    if (item) applyTrackItemLabel(item, i);
+    else syncTrackPips(i);
   }
   if (trackSim?.kind === 'fallback') applyFallbackItem(i);
+}
+
+function applyTrackItemLabel(item, index) {
+  if (!item) return;
+  const name = $('#trackLabel .name'); if (name) name.textContent = item.zh;
+  const spec = $('#trackLabel .spec'); if (spec) spec.textContent = item.spec || '';
+  const hudName = $('#trackHudToggle .hud-name'); if (hudName) hudName.textContent = item.zh;
+  state.trackItem = item.zh;
+  if (index != null) syncTrackPips(index);
+}
+
+let trackHudTimer = null;
+function setTrackHudOpen(open, { autoHide = true } = {}) {
+  document.body.classList.toggle('track-hud-open', !!open);
+  state.trackHudOpen = !!open;
+  const tog = $('#trackHudToggle');
+  if (tog) tog.setAttribute('aria-expanded', open ? 'true' : 'false');
+  clearTimeout(trackHudTimer);
+  if (open && autoHide) {
+    trackHudTimer = setTimeout(() => setTrackHudOpen(false, { autoHide: false }), 2000);
+  }
+  layoutTrackSim();
+}
+
+function toggleTrackHud(e) {
+  e?.preventDefault?.();
+  e?.stopPropagation?.();
+  setTrackHudOpen(!state.trackHudOpen);
+}
+
+function trackOverlayInsets() {
+  const box = $('#trackAr');
+  if (!box) return { top: 0, bottom: 0, width: innerWidth, height: innerHeight };
+  const r = box.getBoundingClientRect();
+  const vis = (el) => {
+    if (!el) return false;
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) return false;
+    const b = el.getBoundingClientRect();
+    return b.width > 0 && b.height > 0;
+  };
+  let top = 0, bottom = 0;
+  for (const sel of ['#modeTabs', '#trackActions', '#trackStatus']) {
+    const el = $(sel);
+    if (!vis(el) || (sel === '#trackStatus' && el.classList.contains('faded'))) continue;
+    top = Math.max(top, el.getBoundingClientRect().bottom - r.top);
+  }
+  const hud = $('#trackHud');
+  if (vis(hud)) bottom = Math.max(bottom, r.bottom - hud.getBoundingClientRect().top);
+  return { top, bottom, width: r.width, height: r.height };
+}
+
+function layoutTrackSim() {
+  if (!trackSim?.hold) return;
+  const { top, bottom, width, height } = trackOverlayInsets();
+  if (height < 2) return;
+  const mid = top + Math.max(1, height - top - bottom) / 2;
+  const frac = (mid - height / 2) / (height / 2);
+  if (trackSim.kind === 'ar') {
+    const cam = trackSim.camera;
+    const fov = ((cam?.fov) || 45) * Math.PI / 180;
+    const z = Math.abs(trackSim.hold.position.z) || 0.62;
+    trackSim.hold.position.y = -frac * Math.tan(fov / 2) * z;
+  } else if (trackSim.kind === 'fallback') {
+    const cam = trackSim.camera;
+    const fov = ((cam?.fov) || 32) * Math.PI / 180;
+    const z = Math.abs((cam?.position?.z || 1.4) - (trackSim.hold.position.z || 0));
+    trackSim.hold.position.y = -frac * Math.tan(fov / 2) * z;
+    if (cam && width > 0) { cam.aspect = width / Math.max(height, 1); cam.updateProjectionMatrix(); }
+  }
+  state.trackClear = { top, bottom, width, height };
 }
 
 function unbindSimPointer() { try { simPtrUnbind?.(); } catch {} simPtrUnbind = null; }
@@ -1888,6 +1957,7 @@ function startArSimulate() {
   trackSim = { kind: 'ar', hold, root, homeParent, scene, camera };
   state.trackSimKind = 'ar';
   bindSimPointer($('#trackAr'), hold);
+  requestAnimationFrame(() => layoutTrackSim());
 }
 
 function applyFallbackItem(index) {
@@ -1966,6 +2036,7 @@ async function startFallbackSimulate() {
     r.setSize(w, h, false);
     cam.aspect = w / h;
     cam.updateProjectionMatrix();
+    layoutTrackSim();
   };
   resize();
   const ro = new ResizeObserver(resize);
@@ -1987,6 +2058,7 @@ async function stopCardSimulate({ keepSession = true, skipHud = false } = {}) {
   state.trackSim = false;
   state.trackSimKind = null;
   document.body.classList.remove('track-sim');
+  setTrackHudOpen(false, { autoHide: false });
   const btn = $('#trackSimBtn');
   if (btn) { btn.disabled = false; btn.textContent = '模擬卡片'; }
   if (skipHud) return;
@@ -2028,6 +2100,8 @@ async function startCardSimulate() {
     const hint = $('#trackLabel .hint');
     if (hint) hint.textContent = '拖曳旋轉、捏合縮放；點圓點或左右切換零件';
     setTrackItem(state.trackItemIndex || 0);
+    setTrackHudOpen(true);
+    requestAnimationFrame(() => layoutTrackSim());
     const bg = trackSim?.kind === 'ar' ? '後鏡頭當背景' : '無相機，深色背景';
     setTrackStatus('模擬卡片：模型已載入（' + bg + '）。可切換 8 個項目，再按一次即可結束。');
   } catch (e) {
@@ -2131,14 +2205,25 @@ function scheduleTrackWarmup() {
   else Promise.resolve(mpPrefetchP || prefetchMpAssets(false)).then(afterMp, afterMp);
 }
 
-function setTrackStatus(msg, { error = false } = {}) {
+let trackStatusTimer = null;
+function setTrackStatus(msg, { error = false, sticky = false } = {}) {
   const el = $('#trackStatus');
   if (el) {
     el.textContent = msg || '';
     el.classList.toggle('err', !!error);
+    el.classList.toggle('faded', !msg);
   }
   state.trackStatus = msg || '';
   state.trackStatusError = !!error;
+  clearTimeout(trackStatusTimer);
+  if (msg && !error && !sticky) {
+    trackStatusTimer = setTimeout(() => {
+      const s = $('#trackStatus');
+      if (s && !s.classList.contains('err')) s.classList.add('faded');
+      layoutTrackSim();
+    }, 2000);
+  }
+  layoutTrackSim();
 }
 
 function explainTrackError(err) {
@@ -2261,10 +2346,7 @@ async function startTrackSession() {
         parts: trackAssets.parts,
         cycleOnTap: true,
         onSelect: (item, index) => {
-          const name = $('#trackLabel .name'); if (name) name.textContent = item.zh;
-          const spec = $('#trackLabel .spec'); if (spec) spec.textContent = item.spec || '';
-          syncTrackPips(index);
-          state.trackItem = item.zh;
+          applyTrackItemLabel(item, index);
         },
         onFound: () => {
           if (state.trackSim) return;
@@ -2272,6 +2354,7 @@ async function startTrackSession() {
           document.body.classList.remove('searching');
           state.trackFound = true;
           setTrackStatus('已找到卡片');
+          setTrackHudOpen(true);
         },
         onLost: () => {
           if (state.trackSim) return;
@@ -2418,6 +2501,8 @@ $('#trackSimBtn')?.addEventListener('click', toggleCardSimulate);
 $('#trackSimIntro')?.addEventListener('click', toggleCardSimulate);
 $('#trackPrev')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setTrackItem((state.trackItemIndex || 0) - 1); });
 $('#trackNext')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setTrackItem((state.trackItemIndex || 0) + 1); });
+$('#trackHudToggle')?.addEventListener('click', toggleTrackHud);
+addEventListener('resize', () => layoutTrackSim());
 const cardHref = rel('track/card.html');
 document.querySelectorAll('a[href="track/card.html"], #trackCardLink, #btnCard').forEach((a) => { a.href = cardHref; });
 
@@ -2433,6 +2518,8 @@ state.preloadTrack = preloadTrack;
 state.startCardSimulate = startCardSimulate;
 state.stopCardSimulate = stopCardSimulate;
 state.setTrackItem = setTrackItem;
+state.setTrackHudOpen = setTrackHudOpen;
+state.layoutTrackSim = layoutTrackSim;
 state.fpsMeter = fpsMeter;
 
 // 啟動

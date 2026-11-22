@@ -614,8 +614,13 @@ export function createAssembly(ctx) {
       if (sheetBtn) { sheetBtn.hidden = !on; sheetBtn.textContent = exp ? '收合' : '說明'; }
     };
     sheetBtn?.addEventListener('click', () => setSheet(!document.body.classList.contains('sheet-expanded')));
+    $('#sheetHandle')?.addEventListener('click', () => {
+      if (!mq.matches) return;
+      setSheet(!document.body.classList.contains('sheet-expanded'));
+    });
     mq.addEventListener?.('change', () => setSheet(false));
     setSheet(false);
+    state.setSheet = setSheet;
     canvas.addEventListener('pointerdown', (e) => {
       if (onCanvasPointer(e)) e.stopPropagation();
     });
@@ -653,6 +658,7 @@ export function createAssembly(ctx) {
       if (!state.ready) { bootFromUrl(); state.ready = true; }
       renderAll();
       applyStepVisuals();
+      state.setSheet?.(false);
     } else {
       restoreDemoMaterials();
       setAnnotating(false);

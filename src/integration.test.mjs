@@ -185,6 +185,66 @@ try {
     ok('assembly hides start intro', info.introHidden, info);
   });
 
+  const iphoneVp = { width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
+  await withPage(browser, base + '?mode=assembly&auto=touch', async (p) => {
+    await p.waitForFunction(() => window.__demo?.modelReady && window.__demo?.appMode === 'assembly', { timeout: 60000 });
+    const collapsed = await p.evaluate(() => {
+      const card = document.querySelector('#asmCard').getBoundingClientRect();
+      const headerBtns = [...document.querySelectorAll('.header-actions .iconbtn')]
+        .filter((el) => !el.hidden && getComputedStyle(el).display !== 'none')
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          const s = getComputedStyle(el);
+          return { id: el.id, h: Math.round(r.height), w: r.width, wrap: s.whiteSpace, right: r.right, top: r.top };
+        });
+      return {
+        collapsed: document.body.classList.contains('sheet-collapsed'),
+        expanded: document.body.classList.contains('sheet-expanded'),
+        cardH: card.height,
+        vh: innerHeight,
+        vw: innerWidth,
+        headerBtns,
+        titleWrap: getComputedStyle(document.querySelector('#docTitle')).whiteSpace,
+      };
+    });
+    ok('iPhone assembly sheet starts collapsed', collapsed.collapsed && !collapsed.expanded, collapsed);
+    ok('collapsed sheet leaves model visible (~40% or less)', collapsed.cardH <= collapsed.vh * 0.42, collapsed);
+    ok('header buttons same height and nowrap, not clipped',
+      collapsed.headerBtns.length >= 3
+      && collapsed.headerBtns.every((b) => b.h === collapsed.headerBtns[0].h && b.h >= 28 && b.h <= 40 && b.wrap === 'nowrap' && b.right <= collapsed.vw + 1)
+      && collapsed.titleWrap === 'nowrap', collapsed);
+
+    await p.click('#btnSheet');
+    const expanded = await p.evaluate(() => {
+      const box = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return { h: Math.round(r.height), w: Math.round(r.width), wrap: s.whiteSpace, right: r.right, display: s.display };
+      };
+      const kicker = ['#btnMenu', '#btnReplay', '#btnSheet'].map(box);
+      const ann = ['#btnAnnotate', '#btnAnnExport', 'label.file-btn'].map(box);
+      const card = document.querySelector('#asmCard').getBoundingClientRect();
+      const sameH = (arr) => arr.every((b) => b && b.display !== 'none' && b.h === arr[0].h && b.wrap === 'nowrap');
+      const closeW = (arr) => {
+        const ws = arr.map((b) => b.w).sort((a, b) => a - b);
+        return ws[ws.length - 1] - ws[0] <= 24;
+      };
+      return {
+        expanded: document.body.classList.contains('sheet-expanded'),
+        kicker, ann,
+        kickerOk: sameH(kicker) && closeW(kicker) && kicker[0].h === 36,
+        annOk: sameH(ann) && closeW(ann) && ann[0].h === 36 && ann[2].right <= innerWidth - 6,
+        cardH: card.height,
+        vh: innerHeight,
+      };
+    });
+    ok('expanded kicker buttons equal height/width, nowrap', expanded.kickerOk, expanded);
+    ok('新增／匯出／匯入 equal size and not clipped', expanded.annOk, expanded);
+    ok('expanded sheet stays about 40% height', expanded.expanded && expanded.cardH <= expanded.vh * 0.42 + 2, expanded);
+  }, { ua: IPHONE, viewport: iphoneVp });
+
   await withPage(browser, base + 'assembly/?ann=examples/SRV-2U-DEMO.annotations.json&device=SRV-2U-DEMO', async (p) => {
     await p.waitForFunction(() => location.pathname === '/' || location.pathname.endsWith('/') && location.search.includes('mode=assembly'), { timeout: 10000 });
     const u = await p.evaluate(() => ({ path: location.pathname, search: location.search }));
@@ -331,13 +391,42 @@ try {
     await sleep(300);
     const stepped = await p.evaluate(() => ({
       index: __demo.trackItemIndex,
-      name: document.querySelector('#trackLabel .name')?.textContent || '',
+      name: document.querySelector('#trackHudToggle .hud-name')?.textContent || document.querySelector('#trackLabel .name')?.textContent || '',
     }));
     ok('next / pips switch item in simulate mode', stepped.index === 1 && stepped.name && stepped.name !== '整機', stepped);
+    await p.evaluate(() => window.__demo.setTrackHudOpen(true, { autoHide: false }));
     await p.evaluate(() => document.querySelectorAll('#trackPips .pip')[3]?.click());
     await sleep(200);
-    const piped = await p.evaluate(() => ({ index: __demo.trackItemIndex, name: document.querySelector('#trackLabel .name')?.textContent || '' }));
+    const piped = await p.evaluate(() => ({ index: __demo.trackItemIndex, name: document.querySelector('#trackHudToggle .hud-name')?.textContent || '' }));
     ok('pip 3 selects 4th item', piped.index === 3 && !!piped.name, piped);
+
+    await p.evaluate(() => window.__demo.setTrackHudOpen(true));
+    await sleep(2300);
+    const hidden = await p.evaluate(() => {
+      const detail = document.querySelector('#trackHudDetail');
+      const status = document.querySelector('#trackStatus');
+      const actions = document.querySelector('#trackActions');
+      const ar = document.querySelector('#trackAr').getBoundingClientRect();
+      const top = actions.getBoundingClientRect();
+      const hud = document.querySelector('#trackHud').getBoundingClientRect();
+      return {
+        open: !!__demo.trackHudOpen,
+        cls: document.body.classList.contains('track-hud-open'),
+        detailDisplay: getComputedStyle(detail).display,
+        statusFaded: status.classList.contains('faded') || getComputedStyle(status).opacity === '0',
+        actionH: Math.round(top.height),
+        clearTop: top.bottom - ar.top,
+        clearBot: ar.bottom - hud.top,
+        arH: ar.height,
+      };
+    });
+    ok('info panel auto-hides after ~2s', !hidden.open && !hidden.cls && hidden.detailDisplay === 'none', hidden);
+    ok('top hint/actions are compact and status fades', hidden.actionH <= 36 && hidden.statusFaded, hidden);
+    ok('model clear area sits between top and bottom UI', hidden.clearTop > 0 && hidden.clearBot > 0 && (hidden.arH - hidden.clearTop - hidden.clearBot) > hidden.arH * 0.45, hidden);
+    await p.click('#trackHudToggle');
+    const shown = await p.evaluate(() => ({ open: !!__demo.trackHudOpen, display: getComputedStyle(document.querySelector('#trackHudDetail')).display }));
+    ok('tap shows collapsed info panel', shown.open && shown.display === 'flex', shown);
+    await p.evaluate(() => window.__demo.setTrackHudOpen(false, { autoHide: false }));
     await p.click('#trackSimBtn');
     await p.waitForFunction(() => window.__demo?.trackSim !== true, { timeout: 8000 }).catch(() => {});
     const ended = await p.evaluate(() => ({
