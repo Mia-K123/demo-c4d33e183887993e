@@ -179,9 +179,22 @@ const WHOOSH_GAIN = 0.18;  // 隨音樂一起略降，避免蓋過
 const THUD_GAIN = 0.6;
 const KEY0 = 1.6, RIM0 = 1.2;
 
-const music = new Audio(rel('audio/explode.mp3'));
-music.preload = 'auto'; music.playsInline = true; music.crossOrigin = 'anonymous';
+const MUSIC_SRC = rel('audio/explode.mp3');
+const music = new Audio();
+music.preload = 'none'; music.playsInline = true; music.crossOrigin = 'anonymous';
 music.setAttribute('playsinline', ''); music.loop = true;
+let musicArmed = false;
+function armMusic() {
+  if (musicArmed) return;
+  musicArmed = true;
+  music.preload = 'auto';
+  music.src = MUSIC_SRC;
+  state.musicArmed = true;
+}
+function allowMusic() {
+  armMusic();
+  if (snd.unlocked && state.soundOn) startMusicQuietOrFull();
+}
 
 const snd = {
   ctx: null, gain: null, noise: null,
@@ -338,6 +351,7 @@ function updateSoundBtn() {
 }
 
 function startMusicQuietOrFull() {
+  armMusic();
   if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
   music.loop = true;
   const to = state.target ? FULL_GAIN : QUIET_GAIN;
@@ -350,14 +364,18 @@ async function unlockAudio() {
     ensureAudio();
     if (snd.ctx && snd.ctx.state !== 'running') await snd.ctx.resume();
     if (snd.gain) { snd.gain.gain.cancelScheduledValues(snd.ctx.currentTime); snd.gain.gain.value = 0; }
+    snd.unlocked = true;
+    state.audioUnlocked = true;
+    updateSoundBtn();
+    if (!musicArmed) {
+      // 手勢模型下載期間不要搶頻寬；模型就緒或觸控模式再載入音樂
+      return;
+    }
     music.loop = true;
     music.muted = true;
     try { await music.play(); } catch {}
     music.muted = false;
     if (music.paused && state.soundOn) { try { await music.play(); } catch {} }
-    snd.unlocked = true;
-    state.audioUnlocked = true;
-    updateSoundBtn();
     if (state.soundOn) startMusicQuietOrFull();
     else { music.pause(); fadeEqPower(snd.gain, 0, 0.01); }
   } catch (e) {
@@ -371,6 +389,7 @@ function toggleSound(ev) {
     state.soundOn = true;
     localStorage.setItem(SOUND_KEY, '1');
     updateSoundBtn();
+    allowMusic();
     unlockAudio();
     return;
   }
@@ -686,16 +705,157 @@ let landmarker = null, video = $('#video'), videoFront = $('#videoFront'), bgSti
 let trackVideo = video, lastVideoTime = -1, lastDetect = 0;
 const hud = $('#hand'), hctx = hud.getContext('2d');
 const camHint = $('#camHint'), modeSheet = $('#modeSheet');
-async function initLandmarker() {
+const MP_CACHE = 'gesture-demo-mp-v1';
+const MP_FILES = [
+  { key: 'wasmJs', url: rel('libs/mediapipe/wasm/vision_wasm_internal.js'), bytes: 336624 },
+  { key: 'wasm', url: rel('libs/mediapipe/wasm/vision_wasm_internal.wasm'), bytes: 14665716 },
+  { key: 'task', url: rel('models/hand_landmarker.task'), bytes: 7819105 },
+];
+let mpPrefetchP = null, mpInitP = null, mpOverlay = false;
+
+function introVisible() {
+  const el = $('#intro');
+  return el && !el.classList.contains('hide');
+}
+
+function setMpProgress(msg, forceOverlay) {
+  state.mpProgress = msg;
+  const hint = $('#preloadHint');
+  if (hint) hint.textContent = msg;
+  const needOverlay = forceOverlay || mpOverlay || !introVisible();
+  if (needOverlay && msg) {
+    $('#loadtxt').textContent = msg;
+    $('#loading').classList.remove('hide');
+  }
+}
+
+function hideMpOverlay() {
+  mpOverlay = false;
+  $('#loading').classList.add('hide');
+}
+
+async function openMpCache() {
+  try { return await caches.open(MP_CACHE); } catch { return null; }
+}
+
+async function fetchMpFile(url, known, onDelta) {
+  const cache = await openMpCache();
+  if (cache) {
+    try {
+      const hit = await cache.match(url, { ignoreSearch: true });
+      if (hit) {
+        const buf = new Uint8Array(await hit.arrayBuffer());
+        onDelta(buf.byteLength);
+        return buf;
+      }
+    } catch {}
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('下載失敗 ' + url.split('/').pop());
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const buf = new Uint8Array(await res.arrayBuffer());
+    onDelta(buf.byteLength);
+    if (cache) try { await cache.put(url, new Response(buf, { headers: { 'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream' } })); } catch {}
+    return buf;
+  }
+  const chunks = [];
+  let n = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    n += value.byteLength;
+    onDelta(value.byteLength);
+  }
+  const buf = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) { buf.set(c, o); o += c.byteLength; }
+  if (cache) {
+    try { await cache.put(url, new Response(buf, { headers: { 'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream' } })); } catch {}
+  }
+  return buf;
+}
+
+async function prefetchMpAssets(forceOverlay) {
+  if (state.mpBuffers) return state.mpBuffers;
+  if (mpPrefetchP) return mpPrefetchP;
+  mpPrefetchP = (async () => {
+    const total = MP_FILES.reduce((s, f) => s + f.bytes, 0);
+    let loaded = 0;
+    const tick = () => {
+      const pct = Math.min(99, Math.round((loaded / total) * 100));
+      const mb = (loaded / 1048576).toFixed(1);
+      const tot = (total / 1048576).toFixed(1);
+      setMpProgress(`下載手勢模型 ${mb} / ${tot} MB（${pct}%）`, forceOverlay);
+    };
+    tick();
+    const out = {};
+    await Promise.all(MP_FILES.map(async (f) => {
+      out[f.key] = await fetchMpFile(f.url, f.bytes, (d) => { loaded += d; tick(); });
+    }));
+    state.mpBuffers = out;
+    state.mpPrefetchDone = true;
+    setMpProgress('手勢模型已下載，正在準備…', forceOverlay);
+    return out;
+  })();
+  try { return await mpPrefetchP; }
+  catch (e) { mpPrefetchP = null; throw e; }
+}
+
+async function initLandmarker(opts = {}) {
   if (landmarker) return landmarker;
-  $('#loadtxt').textContent = '載入手勢辨識模型…'; $('#loading').classList.remove('hide');
-  const fileset = await FilesetResolver.forVisionTasks(rel('libs/mediapipe/wasm'));
-  const opts = (delegate) => ({ baseOptions: { modelAssetPath: rel('models/hand_landmarker.task'), delegate }, runningMode: 'VIDEO', numHands: 1,
-    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
-  try { landmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); state.delegate = 'GPU'; }
-  catch (e) { console.warn('GPU delegate failed, using CPU', e); landmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); state.delegate = 'CPU'; }
-  state.mpReady = true; $('#loading').classList.add('hide');
-  return landmarker;
+  if (mpInitP) {
+    if (opts.overlay) { mpOverlay = true; setMpProgress(state.mpProgress || '正在準備手勢辨識…', true); }
+    return mpInitP;
+  }
+  if (opts.overlay) mpOverlay = true;
+  const quiet = !!opts.quiet && introVisible() && !mpOverlay;
+  mpInitP = (async () => {
+    try {
+      const bufs = await prefetchMpAssets(!quiet);
+      if (!quiet) setMpProgress('正在啟動手勢辨識（GPU）…', true);
+      else setMpProgress('正在啟動手勢辨識…', false);
+      const fileset = await FilesetResolver.forVisionTasks(rel('libs/mediapipe/wasm'));
+      const mk = (delegate) => ({
+        baseOptions: { modelAssetBuffer: bufs.task, delegate },
+        runningMode: 'VIDEO', numHands: 1,
+        minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+      });
+      try {
+        landmarker = await HandLandmarker.createFromOptions(fileset, mk('GPU'));
+        state.delegate = 'GPU';
+      } catch (e) {
+        console.warn('GPU delegate failed, using CPU', e);
+        setMpProgress('GPU 無法使用，改用 CPU…', !quiet);
+        landmarker = await HandLandmarker.createFromOptions(fileset, mk('CPU'));
+        state.delegate = 'CPU';
+      }
+      state.mpReady = true;
+      if (introVisible()) setMpProgress('手勢辨識已準備好，可開啟相機', false);
+      hideMpOverlay();
+      allowMusic();
+      return landmarker;
+    } catch (e) {
+      mpInitP = null;
+      hideMpOverlay();
+      if (introVisible()) setMpProgress('手勢模型預載失敗，開啟相機時會再試', false);
+      throw e;
+    }
+  })();
+  return mpInitP;
+}
+
+function scheduleMpWarmup() {
+  setTimeout(() => {
+    prefetchMpAssets(false).then(() => initLandmarker({ quiet: true })).catch((e) => console.warn('預載入手勢模型失敗', e));
+  }, 200);
+}
+
+function registerMpWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const swUrl = rel('sw.js');
+  navigator.serviceWorker.register(swUrl).catch((e) => console.warn('Service Worker 註冊失敗', e));
 }
 const CAM_KEY = 'gesture-demo-camera';
 const CAM_MODE_KEY = 'gesture-demo-cam-mode';
@@ -834,10 +994,10 @@ async function attachVideo(el, stream) {
   el.playsInline = true;
   try { await el.play(); } catch {}
   if (el.readyState >= 2) return;
-  try { await waitEvent(el, 'loadeddata', 2500); } catch {}
+  try { await waitEvent(el, 'loadeddata', 800); } catch {}
 }
 
-async function waitTrackReady(stream, ms = 1200) {
+async function waitTrackReady(stream, ms = 500) {
   const tr = trackOf(stream);
   if (!tr) return false;
   if (tr.readyState !== 'live') return false;
@@ -867,11 +1027,11 @@ function isMostlyBlack(el) {
   return max < 12 && sum < 32 * 24 * 3 * 0.02;
 }
 
-async function videoLooksLive(el, samples = 3) {
+async function videoLooksLive(el, samples = 2) {
   if (el.readyState < 2) {
-    try { await waitEvent(el, 'loadeddata', 1500); } catch { return false; }
+    try { await waitEvent(el, 'loadeddata', 800); } catch { return false; }
   }
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 40));
   let black = 0, ready = 0;
   for (let i = 0; i < samples; i++) {
     if (el.videoWidth) {
@@ -941,7 +1101,7 @@ async function startDualStill(existingRear) {
   try {
     if (!rear) rear = await openFacingStream('environment', { width: 1280, height: 720 });
     await attachVideo(video, rear);
-    await new Promise((r) => setTimeout(r, 180));
+    await new Promise((r) => setTimeout(r, 80));
     if (video.videoWidth) captureStill(video);
     else throw new Error('無法擷取後置畫面');
   } finally {
@@ -971,6 +1131,12 @@ async function startDualCamera() {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('這個瀏覽器不支援相機（需要 HTTPS 或 localhost）');
   // 先要一次權限，才讀得到鏡頭名稱
   try { await refreshVideoInputs(); } catch {}
+
+  // iPhone / iPad 的 getUserMedia 無法同時開兩顆鏡頭，直接走靜態背景，避免多秒的失敗探測
+  if (isIOS) {
+    await startDualStill(null);
+    return;
+  }
 
   let rear = null, front = null;
   try {
@@ -1121,9 +1287,14 @@ async function reshootBackground() {
 async function enableGestures(preferred) {
   if (preferred === 'dual' || preferred === 'single') state.camMode = preferred;
   try {
-    await initLandmarker();
-    if (state.camMode === 'dual') await startDualCamera();
-    else await startCamera();
+    const mp = initLandmarker({ overlay: true });
+    const cam = (async () => {
+      if (state.camMode === 'dual') await startDualCamera();
+      else await startCamera();
+    })();
+    const camErr = await Promise.allSettled([mp, cam]);
+    if (camErr[1].status === 'rejected') throw camErr[1].reason;
+    if (camErr[0].status === 'rejected') throw camErr[0].reason;
     setStatus('none');
   } catch (e) {
     console.warn(e);
@@ -1145,7 +1316,7 @@ document.addEventListener('click', () => closeModeSheet());
 $('#btnReshoot').onclick = () => { reshootBackground(); };
 $('#startCam').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); enableGestures('single'); };
 $('#startDual').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); enableGestures('dual'); };
-$('#startTouch').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); setStatus('nocam'); };
+$('#startTouch').onclick = () => { allowMusic(); $('#intro').classList.add('hide'); unlockAudio(); setStatus('nocam'); };
 
 state.setCamMode = setCamMode;
 state.reshootBackground = reshootBackground;
@@ -1225,7 +1396,7 @@ function drawHand(lm) {
 let toastT; function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 4500); }
 
 // 啟動
-loadModel().then(() => { $('#loading').classList.add('hide'); state.modelReady = true; renderer.setAnimationLoop(frame); })
+loadModel().then(() => { $('#loading').classList.add('hide'); state.modelReady = true; renderer.setAnimationLoop(frame); registerMpWorker(); scheduleMpWarmup(); })
   .catch((e) => { console.error(e); $('#loadtxt').textContent = '模型載入失敗：' + e.message; });
 // 測試用：?auto=cam / ?auto=touch 直接跳過開始畫面
 const auto = new URLSearchParams(location.search).get('auto');

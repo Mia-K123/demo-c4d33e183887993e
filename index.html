@@ -72,6 +72,7 @@
   .card { max-width: 360px; width: 100%; padding: 22px 20px; border-radius: 22px; background: rgba(18,25,37,.92); border: 1px solid var(--line); text-align: center; }
   .card h2 { margin: 4px 0 6px; font-size: 21px; } .card p { margin: 0 0 16px; color: #b2c0d3; font-size: 14px; line-height: 1.55; }
   .card .btn { display: block; width: 100%; max-width: none; margin-top: 10px; }
+  #preloadHint { margin: 10px 0 0; color: #9fb0c6; font-size: 12px; line-height: 1.45; min-height: 1.4em; }
   .hide { opacity: 0; pointer-events: none; }
   #loading { pointer-events: none; z-index: 4; } #loadtxt { padding: 8px 14px; border-radius: 999px; background: var(--glass); font-size: 13px; }
   #toast { position: fixed; left: 50%; top: 40%; transform: translate(-50%, 10px); max-width: 86vw; padding: 10px 14px; border-radius: 12px; background: rgba(20,26,36,.95);
@@ -140,6 +141,7 @@
     <button id="startCam" class="btn primary">開啟相機，用手勢玩</button>
     <button id="startDual" class="btn">雙鏡頭：前控制、後背景</button>
     <button id="startTouch" class="btn">不用相機，用手指操作</button>
+    <p id="preloadHint"></p>
   </div>
 </div>
 <div id="loading"><div id="loadtxt">載入伺服器模型…</div></div>
