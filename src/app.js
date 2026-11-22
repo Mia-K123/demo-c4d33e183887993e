@@ -36,17 +36,18 @@ function errText(e) {
   return s;
 }
 const ua = navigator.userAgent || '';
+// iPhone UA contains "like Mac OS X" and maxTouchPoints>1 — do NOT treat that as iPad.
+const isIPhone = /iPhone|iPod/.test(ua);
 const isIPadOS = /iPad/.test(ua)
-  || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1)
-  || ((/Macintosh|Mac OS X/.test(ua)) && (navigator.maxTouchPoints || 0) > 1);
-const isIOS = /iP(hone|od)/.test(ua) || isIPadOS;
+  || (!isIPhone && (navigator.platform === 'MacIntel' || /Macintosh/.test(ua)) && (navigator.maxTouchPoints || 0) > 1);
+const isIOS = isIPhone || isIPadOS;
 const isAndroid = /Android/.test(ua);
 const isTouch = matchMedia('(pointer: coarse)').matches || isIOS || isAndroid || (navigator.maxTouchPoints || 0) > 1;
 const PORTRAIT0 = innerHeight > innerWidth; const YAW0 = PORTRAIT0 ? -0.42 : -0.66, PITCH0 = PORTRAIT0 ? 0.5 : 0.36;
 const state = { explode: 0, target: 0, yaw: YAW0, pitch: PITCH0, zoom: 1, tYaw: YAW0, tPitch: PITCH0, tZoom: 1,
   facing: 'user', stream: null, hand: null, gesture: '', camOn: false };
 window.__demo = state;
-state.isIOS = isIOS; state.isIPadOS = isIPadOS; state.isTouch = isTouch;
+state.isIOS = isIOS; state.isIPadOS = isIPadOS; state.isIPhone = isIPhone; state.isTouch = isTouch;
 
 // ---------- three.js ----------
 const canvas = $('#gl');
@@ -1087,7 +1088,11 @@ async function openFacingStream(facing, extra = {}) {
   }
   try { return await tryGet({ ...base, facingMode: { exact: facing } }); }
   catch {}
-  return tryGet({ ...base, facingMode: { ideal: facing } });
+  try { return await tryGet({ ...base, facingMode: { ideal: facing } }); }
+  catch {}
+  try { return await tryGet({ facingMode: { ideal: facing } }); }
+  catch {}
+  return tryGet(true);
 }
 
 function waitEvent(el, ev, ms) {
@@ -1228,7 +1233,11 @@ async function openCameraStream() {
     try { return await tryGet({ ...base, deviceId: { exact: state.deviceId } }); }
     catch { state.deviceId = null; }
   }
-  return tryGet({ ...base, facingMode: { ideal: state.facing } });
+  try { return await tryGet({ ...base, facingMode: { ideal: state.facing } }); }
+  catch {}
+  try { return await tryGet({ facingMode: { ideal: state.facing } }); }
+  catch {}
+  return tryGet(true);
 }
 
 async function startCamera() {
@@ -1299,8 +1308,14 @@ async function startDualCamera() {
 
   // iPhone / iPad 的 getUserMedia 無法同時開兩顆鏡頭，直接走靜態背景，避免多秒的失敗探測
   if (isIOS) {
-    await startDualStill(null);
-    return;
+    try {
+      await startDualStill(null);
+      return;
+    } catch (e) {
+      console.warn('雙鏡頭靜態背景失敗，改用單鏡頭手勢', e);
+      await startCamera();
+      return;
+    }
   }
 
   let rear = null, front = null;
@@ -1493,7 +1508,7 @@ async function enableGestures(preferred) {
   } catch (e) {
     console.warn(e);
     $('#loading').classList.add('hide');
-    toast((/相機|鏡頭|NotAllowed|NotFound|NotReadable|permission/i.test(errText(e)) ? '無法開啟相機：' : '無法載入手勢：') + errText(e) + '。已切換成觸控模式');
+    toast((/相機|鏡頭|NotAllowed|NotFound|NotReadable|NotSupported|Overconstrained|constraint|permission|getUserMedia|SecurityError/i.test(errText(e)) ? '無法開啟相機：' : '無法載入手勢：') + errText(e) + '。已切換成觸控模式');
     state.wantCam = false;
     setStatus('nocam');
   }
@@ -1606,8 +1621,8 @@ function startDetectLoop() {
   };
   if (src && typeof src.requestVideoFrameCallback === 'function') src.requestVideoFrameCallback(onFrame);
   else requestAnimationFrame(onFrame);
-  // iPad only: some camera streams never fire rVFC, or fire once.
-  if (isIPadOS) {
+  // iOS live camera streams may not fire rVFC, or leave currentTime at 0.
+  if (isIOS) {
     const watch = () => {
       if (!detectLoopOn || token !== detectLoopToken) return;
       if (performance.now() - (lastDetect || 0) > 180) detect(performance.now());
@@ -1685,6 +1700,14 @@ function startTrackHandLoop() {
   const src = trackHandVideoEl();
   if (src && typeof src.requestVideoFrameCallback === 'function') src.requestVideoFrameCallback(onFrame);
   else requestAnimationFrame(onFrame);
+  if (isIOS) {
+    const watch = () => {
+      if (!trackHandOn || token !== trackHandToken) return;
+      if (performance.now() - (lastDetect || 0) > 180) detectTrackHand(performance.now());
+      setTimeout(watch, 50);
+    };
+    setTimeout(watch, 80);
+  }
 }
 
 function stopTrackHandLoop() {
@@ -1706,12 +1729,20 @@ function detectTrackHand(now) {
   if (!trackHandOn) return;
   const src = trackHandVideoEl();
   if (!landmarker || !src || src.readyState < 2) return;
-  if (src.currentTime === lastVideoTime) return;
-  lastVideoTime = src.currentTime;
+  if (!src.videoWidth) return;
+  if (isIOS) {
+    if (!shouldInfer(src, now)) return;
+  } else {
+    if (src.currentTime === lastVideoTime) return;
+    lastVideoTime = src.currentTime;
+    lastDetect = now;
+  }
   const t0 = performance.now();
   try {
     const input = detectSource(src);
-    const res = landmarker.detectForVideo(input, now);
+    inferTs = Math.max(inferTs + 1, Math.round(now));
+    const ts = isIOS ? inferTs : now;
+    const res = landmarker.detectForVideo(input, ts);
     const inferMs = performance.now() - t0;
     fpsMeter.detMs = fpsMeter.detMs ? fpsMeter.detMs * 0.8 + inferMs * 0.2 : inferMs;
     fpsMeter.detN++;
@@ -1860,7 +1891,7 @@ function detect(now) {
   if (!landmarker) { state.detSkip = 'no-landmarker'; return; }
   if (!src || src.readyState < 2) { state.detSkip = 'video-not-ready'; return; }
   if (!src.videoWidth) { state.detSkip = 'video-0'; return; }
-  if (isIPadOS) {
+  if (isIOS) {
     if (!shouldInfer(src, now)) return;
   } else {
     if (src.currentTime === lastVideoTime) return;
@@ -1870,7 +1901,7 @@ function detect(now) {
   const t0 = performance.now();
   const input = detectSource(src);
   inferTs = Math.max(inferTs + 1, Math.round(now));
-  const ts = isIPadOS ? inferTs : now;
+  const ts = isIOS ? inferTs : now;
   let res;
   try { res = landmarker.detectForVideo(input, ts); lastInferErr = ''; }
   catch (e) { lastInferErr = errText(e); console.warn(e); state.detSkip = 'infer-err'; return; }
@@ -1912,7 +1943,7 @@ function gestureLegend() {
     pinch: ['🤏', '捏合：縮放'],
     chargeOpen: ['🖐️', asm ? '下一步' : '展開'],
     chargeFist: ['✊', asm ? '上一步' : '收合'],
-    nocam: ['👆', asm ? '觸控模式：拖曳旋轉・雙指縮放・卡片左右滑切換步驟' : '觸控模式：拖曳旋轉・雙指縮放・點兩下展開'],
+    nocam: ['👆', asm ? '觸控：拖曳旋轉、雙指縮放、左右滑切步驟' : '觸控模式：拖曳旋轉・雙指縮放・點兩下展開'],
   };
 }
 function setStatus(g) {
