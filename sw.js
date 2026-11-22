@@ -1,6 +1,6 @@
 /* 快取手勢模型與圖像追蹤資源，讓第二次開啟不必再下載 */
-const MP_CACHE = 'gesture-demo-mp-v1';
-const TRACK_CACHE = 'gesture-demo-track-v1';
+const MP_CACHE = 'gesture-demo-mp-v2';
+const TRACK_CACHE = 'gesture-demo-track-v2';
 const MP_HINT = /vision_wasm_internal\.(js|wasm)$|hand_landmarker\.task$/;
 const TRACK_HINT = /\/track\/(track-mode\.bundle\.js|targets\.mind|card\.png|card\.html)$|\/models\/(server\.glb|parts\.json)$/;
 

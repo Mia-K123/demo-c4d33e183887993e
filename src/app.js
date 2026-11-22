@@ -14,6 +14,27 @@ const rel = (p) => {
   if (!u.searchParams.has('v')) u.searchParams.set('v', ASSET_VER);
   return u.href;
 };
+// MediaPipe concatenates `${base}/vision_wasm_internal.js`. A ?v= on the directory
+// would produce `/wasm?v=xxx/vision_wasm_internal.js` and the loader would fail
+// with an Event (toast then showed "undefined").
+const wasmBase = () => new URL('libs/mediapipe/wasm', document.baseURI).href.replace(/\/+$/, '');
+function errText(e) {
+  if (e == null || e === '') return '未知錯誤';
+  if (typeof e === 'string') return (e === 'undefined' || e === 'null') ? '未知錯誤' : e;
+  const bits = [];
+  if (e.message && String(e.message) !== 'undefined') bits.push(String(e.message));
+  if (e.name && e.name !== 'Error' && String(e.name) !== 'undefined') bits.push(String(e.name));
+  if (!bits.length && e.type) {
+    const src = e.target && (e.target.src || e.target.href);
+    bits.push('載入失敗（' + e.type + (src ? ' ' + src : '') + '）');
+  }
+  if (e.stack) bits.push(String(e.stack).split('\n').slice(0, 4).join(' | '));
+  const s = bits.join(' — ') || String(e);
+  if (!s || s === 'undefined' || s === '[object Event]' || s === '[object Object]' || s === '[object ErrorEvent]') {
+    return '手勢模組載入失敗';
+  }
+  return s;
+}
 const ua = navigator.userAgent || '';
 const isIPadOS = /iPad/.test(ua)
   || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1)
@@ -766,7 +787,7 @@ let landmarker = null, video = $('#video'), videoFront = $('#videoFront'), bgSti
 let trackVideo = video, lastVideoTime = -1, lastDetect = 0;
 const hud = $('#hand'), hctx = hud.getContext('2d');
 const camHint = $('#camHint'), modeSheet = $('#modeSheet');
-const MP_CACHE = 'gesture-demo-mp-v1';
+const MP_CACHE = 'gesture-demo-mp-v2';
 const MP_FILES = [
   { key: 'wasmJs', url: rel('libs/mediapipe/wasm/vision_wasm_internal.js'), bytes: 336624 },
   { key: 'wasm', url: rel('libs/mediapipe/wasm/vision_wasm_internal.wasm'), bytes: 14665716 },
@@ -874,10 +895,13 @@ async function initLandmarker(opts = {}) {
   const quiet = !!opts.quiet && introVisible() && !mpOverlay;
   mpInitP = (async () => {
     try {
+      if (typeof FilesetResolver !== 'function' || typeof HandLandmarker !== 'function') {
+        throw new Error('手勢模組未載入（FilesetResolver 或 HandLandmarker 無效）');
+      }
       const bufs = await prefetchMpAssets(!quiet);
-      if (!quiet) setMpProgress('正在啟動手勢辨識（GPU）…', true);
+      if (!quiet) setMpProgress('正在啟動手勢辨識…', true);
       else setMpProgress('正在啟動手勢辨識…', false);
-      const fileset = await FilesetResolver.forVisionTasks(rel('libs/mediapipe/wasm'));
+      const fileset = await FilesetResolver.forVisionTasks(wasmBase());
       const modelBuf = () => {
         const src = bufs.task;
         const u8 = src instanceof Uint8Array ? src : new Uint8Array(src);
@@ -886,9 +910,11 @@ async function initLandmarker(opts = {}) {
       const mk = (delegate) => ({
         baseOptions: { modelAssetBuffer: modelBuf(), delegate },
         runningMode: 'VIDEO', numHands: 1,
-        minHandDetectionConfidence: 0.45, minHandPresenceConfidence: 0.45, minTrackingConfidence: 0.45,
+        minHandDetectionConfidence: isIPadOS ? 0.45 : 0.5,
+        minHandPresenceConfidence: isIPadOS ? 0.45 : 0.5,
+        minTrackingConfidence: isIPadOS ? 0.45 : 0.5,
       });
-      // iPad GPU delegate often "succeeds" then returns zero hands. Prefer CPU there.
+      // iPhone keeps the proven GPU-first path. iPad prefers CPU (GPU often returns zero hands).
       const order = isIPadOS ? ['CPU', 'GPU'] : ['GPU', 'CPU'];
       let lastErr = null;
       landmarker = null;
@@ -903,7 +929,7 @@ async function initLandmarker(opts = {}) {
         } catch (e) {
           lastErr = e;
           console.warn(del + ' delegate failed', e);
-          state.mpError = del + ': ' + (e?.message || e?.type || String(e));
+          state.mpError = del + '：' + errText(e);
         }
       }
       if (!landmarker) throw lastErr || new Error('HandLandmarker 啟動失敗');
@@ -1467,7 +1493,7 @@ async function enableGestures(preferred) {
   } catch (e) {
     console.warn(e);
     $('#loading').classList.add('hide');
-    toast('無法開啟相機：' + (e.message || e.name) + '。已切換成觸控模式');
+    toast((/相機|鏡頭|NotAllowed|NotFound|NotReadable|permission/i.test(errText(e)) ? '無法開啟相機：' : '無法載入手勢：') + errText(e) + '。已切換成觸控模式');
     state.wantCam = false;
     setStatus('nocam');
   }
@@ -1547,8 +1573,8 @@ function noteRenderFps(now) {
 
 function detectSource(videoEl) {
   if (!videoEl || !videoEl.videoWidth) return videoEl;
-  // iOS/iPad: passing a 2D canvas into HandLandmarker often yields zero hands. Use the video itself.
-  if (isIOS) { fpsMeter.srcW = videoEl.videoWidth; return videoEl; }
+  // iPad only: pass the video element. iPhone keeps the canvas downscale path that worked before.
+  if (isIPadOS) { fpsMeter.srcW = videoEl.videoWidth; return videoEl; }
   const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
   if (vw <= DETECT_MAX) { fpsMeter.srcW = vw; return videoEl; }
   const w = DETECT_MAX, h = Math.max(1, Math.round(vh * (DETECT_MAX / vw)));
@@ -1580,13 +1606,15 @@ function startDetectLoop() {
   };
   if (src && typeof src.requestVideoFrameCallback === 'function') src.requestVideoFrameCallback(onFrame);
   else requestAnimationFrame(onFrame);
-  // Some iPadOS camera streams never fire rVFC, or fire once. Keep a watchdog.
-  const watch = () => {
-    if (!detectLoopOn || token !== detectLoopToken) return;
-    if (performance.now() - (lastDetect || 0) > 180) detect(performance.now());
-    setTimeout(watch, 50);
-  };
-  setTimeout(watch, 80);
+  // iPad only: some camera streams never fire rVFC, or fire once.
+  if (isIPadOS) {
+    const watch = () => {
+      if (!detectLoopOn || token !== detectLoopToken) return;
+      if (performance.now() - (lastDetect || 0) > 180) detect(performance.now());
+      setTimeout(watch, 50);
+    };
+    setTimeout(watch, 80);
+  }
 }
 
 function stopDetectLoop() {
@@ -1601,7 +1629,7 @@ async function switchLandmarkerToCpu(why) {
   state.mpError = why || 'GPU 無手勢結果，改用 CPU';
   try {
     const bufs = await prefetchMpAssets(false);
-    const fileset = await FilesetResolver.forVisionTasks(rel('libs/mediapipe/wasm'));
+    const fileset = await FilesetResolver.forVisionTasks(wasmBase());
     const src = bufs.task;
     const u8 = src instanceof Uint8Array ? src : new Uint8Array(src);
     const next = await HandLandmarker.createFromOptions(fileset, {
@@ -1618,7 +1646,7 @@ async function switchLandmarkerToCpu(why) {
     try { old?.close?.(); } catch {}
   } catch (e) {
     console.warn(e);
-    state.mpError = 'CPU 後備失敗：' + (e?.message || e);
+    state.mpError = 'CPU 後備失敗：' + errText(e);
   } finally {
     switchingDelegate = false;
   }
@@ -1832,13 +1860,20 @@ function detect(now) {
   if (!landmarker) { state.detSkip = 'no-landmarker'; return; }
   if (!src || src.readyState < 2) { state.detSkip = 'video-not-ready'; return; }
   if (!src.videoWidth) { state.detSkip = 'video-0'; return; }
-  if (!shouldInfer(src, now)) return;
+  if (isIPadOS) {
+    if (!shouldInfer(src, now)) return;
+  } else {
+    if (src.currentTime === lastVideoTime) return;
+    lastVideoTime = src.currentTime;
+    lastDetect = now;
+  }
   const t0 = performance.now();
   const input = detectSource(src);
   inferTs = Math.max(inferTs + 1, Math.round(now));
+  const ts = isIPadOS ? inferTs : now;
   let res;
-  try { res = landmarker.detectForVideo(input, inferTs); lastInferErr = ''; }
-  catch (e) { lastInferErr = String(e?.message || e); console.warn(e); state.detSkip = 'infer-err'; return; }
+  try { res = landmarker.detectForVideo(input, ts); lastInferErr = ''; }
+  catch (e) { lastInferErr = errText(e); console.warn(e); state.detSkip = 'infer-err'; return; }
   const lm = noteInfer(t0, now, res);
   drawHand(lm);
   const mirrored = state.camMode === 'dual' || state.facing === 'user';
@@ -1940,7 +1975,7 @@ function updateModeTabs() {
 }
 
 let trackMod = null, trackAssets = null, trackSession = null, trackBusy = false, trackPreloadP = null, trackSim = null, simPtrUnbind = null;
-const TRACK_CACHE = 'gesture-demo-track-v1';
+const TRACK_CACHE = 'gesture-demo-track-v2';
 const TRACK_FILES = [
   { url: () => rel('track/track-mode.bundle.js'), bytes: 2810444, w: 0.62 },
   { url: () => rel('track/targets.mind'), bytes: 753330, w: 0.22 },
@@ -2925,6 +2960,10 @@ document.querySelectorAll('a[href="track/card.html"], #trackCardLink, #btnCard')
 
 
 state.setAppMode = setAppMode;
+state.initLandmarker = (opts) => initLandmarker(opts || { overlay: false });
+state.errText = errText;
+state.wasmBase = wasmBase;
+
 state.releaseCameras = releaseCameras;
 state.acquireCameras = acquireCameras;
 state.defaultCamMode = defaultCamMode;
