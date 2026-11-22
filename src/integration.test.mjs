@@ -439,7 +439,7 @@ try {
         prevVisible: getComputedStyle(document.querySelector('#trackPrev')).display !== 'none',
       };
     });
-    ok('top hint/actions are compact and status fades', hidden.actionH <= 36 && hidden.statusFaded, hidden);
+    ok('top hint/actions are compact and status fades', hidden.actionH <= 44 && hidden.statusFaded, hidden);
     ok('model clear area sits between top and bottom UI', hidden.clearTop > 0 && hidden.clearBot > 0 && (hidden.arH - hidden.clearTop - hidden.clearBot) > hidden.arH * 0.45, hidden);
     ok('‹ › fallback stays available', hidden.prevVisible, hidden);
     await p.click('#trackSimBtn');

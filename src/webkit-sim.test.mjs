@@ -101,20 +101,28 @@ async function run(name, type, launchOpts, grantCam) {
   const shot = path.join(OUT, `${name}-simulate-menu.png`);
   await page.screenshot({ path: shot, fullPage: false });
   const pixels = analyzeShot(shot);
+  await page.click('#trackNext');
+  await page.waitForTimeout(900);
+  const shot2 = path.join(OUT, `${name}-simulate-menu-2.png`);
+  await page.screenshot({ path: shot2, fullPage: false });
+  const pixels2 = analyzeShot(shot2);
+  const item2 = await page.evaluate(() => ({ index: __demo.trackItemIndex, name: document.querySelector('#trackLabel .name')?.textContent || '' }));
   console.log('====', name, '====');
   console.log(info, pixels, shot);
+  console.log(name, 'item2', item2, pixels2, shot2);
   ok(`${name} uses host renderer`, info.kind === 'host' && info.parent === 'trackAr' && info.display === 'block' && info.w > 100, info);
   ok(`${name} debug has canvas/meshes/frames`, /sim canv=\d+x\d+/.test(info.debug) && info.meshes > 0 && info.frames > 8, info);
   ok(`${name} AR ring menu in scene`, info.arMenuOn && info.arIconCount === 8 && info.arHasBubble, info);
   ok(`${name} model pixels visible in #gl`, pixels.ratio > 0.02 && pixels.maxL > 40, pixels);
   ok(`${name} label bubble visible`, pixels.white > 80 || pixels.whiteRatio > 0.002, pixels);
+  ok(`${name} second item visible`, item2.index === 1 && pixels2.ratio > 0.02 && pixels2.maxL > 40 && (pixels2.white > 80 || pixels2.whiteRatio > 0.002), { item2, pixels2 });
   await browser.close();
-  return { info, pixels, shot };
+  return { info, pixels, shot, shot2, item2 };
 }
 
 try {
   const wk = await run('webkit', webkit, {}, false);
-  console.log('WEBKIT_SHOT', wk.shot);
+  console.log('WEBKIT_SHOT', wk.shot); console.log('WEBKIT_SHOT2', wk.shot2);
   try {
     const cr = await run('chromium', chromium, {
       executablePath: '/home/box/.cache/ms-playwright/chromium-1255/chrome-linux64/chrome',

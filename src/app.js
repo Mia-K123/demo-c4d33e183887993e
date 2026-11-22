@@ -14,11 +14,18 @@ const rel = (p) => {
   if (!u.searchParams.has('v')) u.searchParams.set('v', ASSET_VER);
   return u.href;
 };
-const isTouch = matchMedia('(pointer: coarse)').matches;
+const ua = navigator.userAgent || '';
+const isIPadOS = /iPad/.test(ua)
+  || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1)
+  || ((/Macintosh|Mac OS X/.test(ua)) && (navigator.maxTouchPoints || 0) > 1);
+const isIOS = /iP(hone|od)/.test(ua) || isIPadOS;
+const isAndroid = /Android/.test(ua);
+const isTouch = matchMedia('(pointer: coarse)').matches || isIOS || isAndroid || (navigator.maxTouchPoints || 0) > 1;
 const PORTRAIT0 = innerHeight > innerWidth; const YAW0 = PORTRAIT0 ? -0.42 : -0.66, PITCH0 = PORTRAIT0 ? 0.5 : 0.36;
 const state = { explode: 0, target: 0, yaw: YAW0, pitch: PITCH0, zoom: 1, tYaw: YAW0, tPitch: PITCH0, tZoom: 1,
   facing: 'user', stream: null, hand: null, gesture: '', camOn: false };
 window.__demo = state;
+state.isIOS = isIOS; state.isIPadOS = isIPadOS; state.isTouch = isTouch;
 
 // ---------- three.js ----------
 const canvas = $('#gl');
@@ -168,7 +175,7 @@ function frame(now, xrFrame) {
   } else if (state.trackSim && arMenuHost) {
     setExplodePositions(0);
     arMenuHost.tick(dt, camera);
-    const dist = 3.85 / Math.max(0.55, state.zoom);
+    const dist = 3.35 / Math.max(0.55, state.zoom);
     const pit = state.pitch;
     const yaw = state.yaw;
     camera.position.set(
@@ -176,7 +183,7 @@ function frame(now, xrFrame) {
       Math.sin(pit) * dist,
       Math.cos(yaw) * dist * Math.cos(pit),
     );
-    camera.lookAt(0, 0.12, 0);
+    camera.lookAt(0, 0.18, 0.02);
     for (const gr of Object.values(groups)) if (gr.el) gr.el.style.opacity = 0;
   } else {
     pivot.rotation.y = state.yaw;
@@ -505,9 +512,8 @@ addEventListener('keydown', (e) => {
 });
 
 // ---------- AR：WebXR（Quest / 安卓 Chrome）＋ Scene Viewer / Quick Look 後備 ----------
-const ua = navigator.userAgent;
-const isIOS = /iP(hone|ad|od)/.test(ua) || (ua.includes('Mac') && navigator.maxTouchPoints > 1);
-const isAndroid = /Android/.test(ua);
+// isIOS / isIPadOS / isAndroid / isTouch are declared at the top so camera + MediaPipe
+// take the mobile path even when iPadOS Safari spoofs a Mac desktop UA.
 const arBtn = $('#btnAR');
 const ar = { session: null, hitSource: null, placed: false, placing: true, resumeCam: false, refType: 'local-floor' };
 state.xrAR = false;
@@ -872,21 +878,37 @@ async function initLandmarker(opts = {}) {
       if (!quiet) setMpProgress('正在啟動手勢辨識（GPU）…', true);
       else setMpProgress('正在啟動手勢辨識…', false);
       const fileset = await FilesetResolver.forVisionTasks(rel('libs/mediapipe/wasm'));
+      const modelBuf = () => {
+        const src = bufs.task;
+        const u8 = src instanceof Uint8Array ? src : new Uint8Array(src);
+        return u8.slice(); // never hand the only copy to WASM (it may detach)
+      };
       const mk = (delegate) => ({
-        baseOptions: { modelAssetBuffer: bufs.task, delegate },
+        baseOptions: { modelAssetBuffer: modelBuf(), delegate },
         runningMode: 'VIDEO', numHands: 1,
-        minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+        minHandDetectionConfidence: 0.45, minHandPresenceConfidence: 0.45, minTrackingConfidence: 0.45,
       });
-      try {
-        landmarker = await HandLandmarker.createFromOptions(fileset, mk('GPU'));
-        state.delegate = 'GPU';
-      } catch (e) {
-        console.warn('GPU delegate failed, using CPU', e);
-        setMpProgress('GPU 無法使用，改用 CPU…', !quiet);
-        landmarker = await HandLandmarker.createFromOptions(fileset, mk('CPU'));
-        state.delegate = 'CPU';
+      // iPad GPU delegate often "succeeds" then returns zero hands. Prefer CPU there.
+      const order = isIPadOS ? ['CPU', 'GPU'] : ['GPU', 'CPU'];
+      let lastErr = null;
+      landmarker = null;
+      for (const del of order) {
+        try {
+          if (!quiet) setMpProgress(`正在啟動手勢辨識（${del}）…`, true);
+          landmarker = await HandLandmarker.createFromOptions(fileset, mk(del));
+          state.delegate = del;
+          state.mpError = '';
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          console.warn(del + ' delegate failed', e);
+          state.mpError = del + ': ' + (e?.message || e?.type || String(e));
+        }
       }
+      if (!landmarker) throw lastErr || new Error('HandLandmarker 啟動失敗');
       state.mpReady = true;
+      state.mpOrder = order.join('→');
       if (introVisible()) setMpProgress('手勢辨識已準備好，可開啟相機', false);
       hideMpOverlay();
       allowMusic();
@@ -1508,6 +1530,7 @@ function updateChargeUI(r) {
 
 const DETECT_MAX = (isTouch || isIOS || isAndroid) ? 320 : 480;
 let detectCanvas = null, detectCtx = null, detectLoopOn = false, detectLoopToken = 0;
+let inferTs = 0, emptyHands = 0, detectSkips = 0, lastInferErr = '', switchingDelegate = false;
 const fpsMeter = { detN: 0, detT: 0, detFps: 0, detMs: 0, drawN: 0, drawT: 0, drawFps: 0, rvfc: false, srcW: 0 };
 
 function noteRenderFps(now) {
@@ -1524,6 +1547,8 @@ function noteRenderFps(now) {
 
 function detectSource(videoEl) {
   if (!videoEl || !videoEl.videoWidth) return videoEl;
+  // iOS/iPad: passing a 2D canvas into HandLandmarker often yields zero hands. Use the video itself.
+  if (isIOS) { fpsMeter.srcW = videoEl.videoWidth; return videoEl; }
   const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
   if (vw <= DETECT_MAX) { fpsMeter.srcW = vw; return videoEl; }
   const w = DETECT_MAX, h = Math.max(1, Math.round(vh * (DETECT_MAX / vw)));
@@ -1542,6 +1567,7 @@ function detectSource(videoEl) {
 function startDetectLoop() {
   if (state.appMode === 'track' || !state.camOn) return;
   detectLoopOn = true;
+  state.detLoop = true;
   const token = ++detectLoopToken;
   const src = trackVideo || video;
   fpsMeter.rvfc = !!(src && typeof src.requestVideoFrameCallback === 'function');
@@ -1554,11 +1580,48 @@ function startDetectLoop() {
   };
   if (src && typeof src.requestVideoFrameCallback === 'function') src.requestVideoFrameCallback(onFrame);
   else requestAnimationFrame(onFrame);
+  // Some iPadOS camera streams never fire rVFC, or fire once. Keep a watchdog.
+  const watch = () => {
+    if (!detectLoopOn || token !== detectLoopToken) return;
+    if (performance.now() - (lastDetect || 0) > 180) detect(performance.now());
+    setTimeout(watch, 50);
+  };
+  setTimeout(watch, 80);
 }
 
 function stopDetectLoop() {
   detectLoopOn = false;
+  state.detLoop = false;
   detectLoopToken++;
+}
+
+async function switchLandmarkerToCpu(why) {
+  if (switchingDelegate || state.delegate === 'CPU') return;
+  switchingDelegate = true;
+  state.mpError = why || 'GPU 無手勢結果，改用 CPU';
+  try {
+    const bufs = await prefetchMpAssets(false);
+    const fileset = await FilesetResolver.forVisionTasks(rel('libs/mediapipe/wasm'));
+    const src = bufs.task;
+    const u8 = src instanceof Uint8Array ? src : new Uint8Array(src);
+    const next = await HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetBuffer: u8.slice(), delegate: 'CPU' },
+      runningMode: 'VIDEO', numHands: 1,
+      minHandDetectionConfidence: 0.45, minHandPresenceConfidence: 0.45, minTrackingConfidence: 0.45,
+    });
+    const old = landmarker;
+    landmarker = next;
+    state.delegate = 'CPU';
+    state.mpReady = true;
+    emptyHands = 0;
+    lastVideoTime = -1;
+    try { old?.close?.(); } catch {}
+  } catch (e) {
+    console.warn(e);
+    state.mpError = 'CPU 後備失敗：' + (e?.message || e);
+  } finally {
+    switchingDelegate = false;
+  }
 }
 
 let trackHandOn = false, trackHandToken = 0, trackHandFails = 0, trackHandSlow = 0;
@@ -1716,15 +1779,27 @@ async function ensureTrackHands() {
   }
 }
 
-function detect(now) {
-  if (ar.session || renderer.xr.isPresenting) return; // AR 進行中暫停手勢相機推論
-  if (!state.camOn || state.appMode === 'track') return;
-  const src = trackVideo || video;
-  if (!landmarker || !src || src.readyState < 2) return;
-  if (src.currentTime === lastVideoTime) return; lastVideoTime = src.currentTime; lastDetect = now;
-  const t0 = performance.now();
-  const input = detectSource(src);
-  let res; try { res = landmarker.detectForVideo(input, now); } catch (e) { console.warn(e); return; }
+function shouldInfer(src, now) {
+  const vt = src.currentTime;
+  const hasTime = Number.isFinite(vt);
+  const zeroStuck = !hasTime || vt === 0 || (vt === lastVideoTime && (now - lastDetect) >= 33);
+  // iOS live streams often leave currentTime at 0 after the first frame; don't stall the loop.
+  if (hasTime && vt > 0 && vt === lastVideoTime && !zeroStuck) {
+    detectSkips++;
+    state.detSkip = 'same-frame';
+    return false;
+  }
+  if ((!hasTime || vt === 0 || vt === lastVideoTime) && (now - lastDetect) < 33) {
+    state.detSkip = 'throttle';
+    return false;
+  }
+  if (hasTime && vt > 0) lastVideoTime = vt;
+  lastDetect = now;
+  state.detSkip = '';
+  return true;
+}
+
+function noteInfer(t0, now, res) {
   const inferMs = performance.now() - t0;
   fpsMeter.detMs = fpsMeter.detMs ? fpsMeter.detMs * 0.8 + inferMs * 0.2 : inferMs;
   fpsMeter.detN++;
@@ -1736,7 +1811,35 @@ function detect(now) {
     state.detFps = fpsMeter.detFps;
     state.detMs = Math.round(fpsMeter.detMs);
   }
-  const lm = res.landmarks?.[0];
+  const lm = res?.landmarks?.[0] || null;
+  state.hands = lm ? 1 : 0;
+  if (lm) emptyHands = 0;
+  else {
+    emptyHands++;
+    if (state.delegate === 'GPU' && emptyHands >= 20 && state.camOn) switchLandmarkerToCpu('GPU 連續無手勢，改用 CPU');
+  }
+  return lm;
+}
+
+function detect(now) {
+  if (ar.session || renderer.xr.isPresenting) { state.detSkip = 'ar'; return; }
+  if (!state.camOn || state.appMode === 'track') { state.detSkip = state.appMode === 'track' ? 'track' : 'cam-off'; return; }
+  const src = trackVideo || video;
+  state.videoW = src?.videoWidth || 0;
+  state.videoH = src?.videoHeight || 0;
+  state.videoT = src ? src.currentTime : -1;
+  state.videoReady = src?.readyState || 0;
+  if (!landmarker) { state.detSkip = 'no-landmarker'; return; }
+  if (!src || src.readyState < 2) { state.detSkip = 'video-not-ready'; return; }
+  if (!src.videoWidth) { state.detSkip = 'video-0'; return; }
+  if (!shouldInfer(src, now)) return;
+  const t0 = performance.now();
+  const input = detectSource(src);
+  inferTs = Math.max(inferTs + 1, Math.round(now));
+  let res;
+  try { res = landmarker.detectForVideo(input, inferTs); lastInferErr = ''; }
+  catch (e) { lastInferErr = String(e?.message || e); console.warn(e); state.detSkip = 'infer-err'; return; }
+  const lm = noteInfer(t0, now, res);
   drawHand(lm);
   const mirrored = state.camMode === 'dual' || state.facing === 'user';
   const r = gesture.update({
@@ -1790,13 +1893,15 @@ function updateDebug(r) {
   if (!document.body.classList.contains('debug')) return;
   const el = $('#gdebug'); if (!el) return;
   const d = r || state.gLast || {};
+  const orient = (screen.orientation && screen.orientation.type) || (innerWidth > innerHeight ? 'landscape' : 'portrait');
   el.textContent = [
     `mode=${state.appMode || 'demo'} pose=${d.pose || '-'} raw=${d.raw || '-'} status=${d.status || state.gesture || '-'}`,
     `hold=${Math.round((d.hold || 0) * 100)}% last=${d.lastAction || '-'} nExt=${d.nExt ?? '-'} nCurled=${d.nCurled ?? '-'}`,
-    `cam=${state.camMode} kind=${state.dualKind || '-'} facing=${state.facing} on=${!!state.camOn}`,
-    `fps det=${fpsMeter.detFps || 0} infer=${Math.round(fpsMeter.detMs)}ms rend=${fpsMeter.drawFps || 0} rvfc=${fpsMeter.rvfc ? 1 : 0} src=${fpsMeter.srcW || '-'}`,
-    `clearAlpha=${renderer.getClearAlpha()} still=${stillIsNonBlack() ? 'ok' : 'no'} bg=${scene.background == null ? 'null' : 'set'}`,
-    state.trackSim ? `sim canv=${canvas.width}x${canvas.height} css=${canvas.clientWidth}x${canvas.clientHeight} meshes=${state.simMeshCount ?? 0} frames=${state.simFrames || 0} hands=${state.trackHands || '-'} ` : `asset=${ASSET_VER} hands=${state.trackHands || '-'}`,
+    `mp=${state.mpReady ? 'ready' : (state.mpError ? 'fail' : 'load')} del=${state.delegate || '-'} loop=${detectLoopOn ? 'on' : 'off'} skip=${state.detSkip || '-'} hands=${state.hands ?? 0} empty=${emptyHands} err=${lastInferErr || state.mpError || '-'}`,
+    `cam=${state.camMode} kind=${state.dualKind || '-'} facing=${state.facing} on=${!!state.camOn} ios=${isIOS ? 1 : 0} ipad=${isIPadOS ? 1 : 0} touch=${isTouch ? 1 : 0}`,
+    `video=${state.videoW || 0}x${state.videoH || 0} t=${Number(state.videoT || 0).toFixed(2)} ready=${state.videoReady ?? '-'} orient=${orient}`,
+    `fps det=${fpsMeter.detFps || 0} infer=${Math.round(fpsMeter.detMs)}ms rend=${fpsMeter.drawFps || 0} rvfc=${fpsMeter.rvfc ? 1 : 0} src=${fpsMeter.srcW || '-'} skips=${detectSkips}`,
+    state.trackSim ? `sim canv=${canvas.width}x${canvas.height} css=${canvas.clientWidth}x${canvas.clientHeight} meshes=${state.simMeshCount ?? 0} frames=${state.simFrames || 0} hands=${state.trackHands || '-'} ` : `asset=${ASSET_VER} trackHands=${state.trackHands || '-'}`,
   ].join('\n');
 }
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
@@ -2125,11 +2230,12 @@ function attachHostGlForSim() {
       items: TRACK_ITEMS,
       showCard: true,
       cardMap: cardTex || null,
-      radius: 0.70,
-      disc: 0.105,
-      cardW: 0.98,
-      cardH: 0.66,
-      modelY: 0.02,
+      radius: 0.50,
+      disc: 0.068,
+      cardW: 0.62,
+      cardH: 0.42,
+      modelY: 0.38,
+      modelTilt: -0.2,
       onSelect: (item, i) => {
         state.trackItemIndex = i;
         applyHostSimItem(i, { fromMenu: true });
@@ -2142,7 +2248,7 @@ function attachHostGlForSim() {
     arMenuHost.modelSpin.add(pivot);
   }
   pivot.rotation.set(0, 0.25, 0);
-  pivot.scale.setScalar(0.20);
+  pivot.scale.setScalar(0.23);
   pivot.visible = true;
   if (modelRoot) modelRoot.visible = true;
   if (shadow) shadow.visible = false;
@@ -2159,6 +2265,7 @@ function attachHostGlForSim() {
 function detachHostGlFromSim() {
   stopTrackHandLoop();
   try { camera.clearViewOffset(); } catch {}
+  if (state._fovSaved) { camera.fov = state._fovSaved; state._fovSaved = 0; }
   restoreSimMaterials();
   if (arMenuHost) {
     try { arMenuHost.modelSpin.remove(pivot); } catch {}
@@ -2391,12 +2498,15 @@ async function startCardSimulate() {
     $('#trackIntro')?.classList.add('hide');
     const hasCam = await startSimBackgroundVideo();
     await loadCardTexture();
+    state._fovSaved = camera.fov;
+    camera.fov = 46;
+    camera.updateProjectionMatrix();
     attachHostGlForSim();
     state.trackSim = true;
     state.trackSimKind = 'host';
     trackSim = { kind: 'host' };
-    state.tYaw = 0; state.tPitch = 0.68; state.tZoom = 1;
-    state.yaw = 0; state.pitch = 0.68; state.zoom = 1;
+    state.tYaw = 0; state.tPitch = 1.05; state.tZoom = 1;
+    state.yaw = 0; state.pitch = 1.05; state.zoom = 1;
     applyHostSimItem(state.trackItemIndex || 0);
     if (arMenuHost) arMenuHost.setIndex(state.trackItemIndex || 0, { instant: true, silent: true });
     renderer.setAnimationLoop(frame);

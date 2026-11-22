@@ -85030,19 +85030,19 @@ function paintIcon(item, selected) {
 }
 function paintBubble(name, spec) {
   const c6 = document.createElement("canvas");
-  c6.width = 768;
-  c6.height = 256;
+  c6.width = 1024;
+  c6.height = 280;
   const g = c6.getContext("2d");
-  g.clearRect(0, 0, 768, 256);
-  const x7 = 28, y6 = 16, w = 712, h6 = 184, r = 36;
+  g.clearRect(0, 0, 1024, 280);
+  const x7 = 36, y6 = 52, w = 952, h6 = 176, r = 40;
   g.fillStyle = "rgba(255,255,255,0.96)";
   g.beginPath();
   g.moveTo(x7 + r, y6);
+  g.lineTo(512 - 22, y6);
+  g.lineTo(512, 8);
+  g.lineTo(512 + 22, y6);
   g.arcTo(x7 + w, y6, x7 + w, y6 + h6, r);
   g.arcTo(x7 + w, y6 + h6, x7, y6 + h6, r);
-  g.lineTo(x7 + w * 0.52, y6 + h6);
-  g.lineTo(x7 + w * 0.5, y6 + h6 + 36);
-  g.lineTo(x7 + w * 0.44, y6 + h6);
   g.arcTo(x7, y6 + h6, x7, y6, r);
   g.arcTo(x7, y6, x7 + w, y6, r);
   g.closePath();
@@ -85050,29 +85050,42 @@ function paintBubble(name, spec) {
   g.lineWidth = 3;
   g.strokeStyle = "rgba(20,28,40,0.12)";
   g.stroke();
-  g.textAlign = "center";
-  g.textBaseline = "alphabetic";
-  const fit = (text, font, maxW) => {
+  g.strokeStyle = "rgba(20,28,40,0.16)";
+  g.beginPath();
+  g.moveTo(400, y6 + 36);
+  g.lineTo(400, y6 + h6 - 36);
+  g.stroke();
+  const fit = (text, weight, font, maxW) => {
     let size = font;
-    g.font = `bold ${size}px "PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif`;
-    while (size > 28 && g.measureText(text).width > maxW) {
+    g.font = `${weight} ${size}px "PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif`;
+    while (size > 22 && g.measureText(text).width > maxW) {
       size -= 2;
-      g.font = `bold ${size}px "PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif`;
+      g.font = `${weight} ${size}px "PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif`;
     }
     return size;
   };
+  g.textBaseline = "middle";
   g.fillStyle = "#151a22";
-  fit(name || "", 58, 640);
-  g.fillText(name || "", 384, 92);
+  g.textAlign = "center";
+  fit(name || "", "bold", 52, 320);
+  g.fillText(name || "", 218, y6 + h6 / 2);
   g.fillStyle = "#5a6573";
+  g.textAlign = "left";
   const sub = spec ? `${spec}` : "";
-  let subSize = 28;
-  g.font = `${subSize}px "PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif`;
-  while (subSize > 18 && g.measureText(sub).width > 640) {
-    subSize -= 1;
-    g.font = `${subSize}px "PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif`;
-  }
-  g.fillText(sub, 384, 148);
+  fit(sub, "500", 30, 540);
+  g.fillText(sub, 430, y6 + h6 / 2);
+  return c6;
+}
+function paintGlow() {
+  const c6 = document.createElement("canvas");
+  c6.width = c6.height = 256;
+  const g = c6.getContext("2d");
+  const grd = g.createRadialGradient(128, 128, 8, 128, 128, 128);
+  grd.addColorStop(0, "rgba(200, 220, 255, 0.55)");
+  grd.addColorStop(0.35, "rgba(80, 140, 220, 0.22)");
+  grd.addColorStop(1, "rgba(80, 140, 220, 0)");
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 256, 256);
   return c6;
 }
 function drawGlyph(ctx, kind, cx2, cy3, r, color) {
@@ -85209,16 +85222,26 @@ function createArMenu(THREE, opts = {}) {
     ring.add(hold);
     return { item, mesh, mat, hold, tex, i: i6 };
   });
+  const glowMap = colorize(new THREE.CanvasTexture(paintGlow()), THREE);
+  const glow = new THREE.Mesh(
+    new THREE.CircleGeometry(opts.glowR ?? 0.28, 48),
+    new THREE.MeshBasicMaterial({ map: glowMap, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  );
+  glow.rotation.x = -Math.PI / 2;
+  glow.position.y = 6e-3;
+  glow.name = "arGlow";
+  root.add(glow);
   const bubble = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.52, 0.175),
+    new THREE.PlaneGeometry(0.72, 0.2),
     new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide })
   );
   bubble.name = "arBubble";
-  bubble.position.set(0, 0.4, radius * 0.28);
+  bubble.position.set(0, 0.1, radius + 0.22);
   root.add(bubble);
   const modelAnchor = new THREE.Group();
   modelAnchor.name = "arModelAnchor";
-  modelAnchor.position.y = opts.modelY ?? 0.16;
+  modelAnchor.position.y = opts.modelY ?? 0.34;
+  if (opts.modelTilt != null) modelAnchor.rotation.x = opts.modelTilt;
   root.add(modelAnchor);
   const modelSpin = new THREE.Group();
   modelSpin.name = "arModelSpin";
@@ -85244,12 +85267,12 @@ function createArMenu(THREE, opts = {}) {
   const setIndex = (i6, { instant = false, silent = false } = {}) => {
     const next = (i6 % n + n) % n;
     if (next === index && switchT >= 1) {
-      ringTarget = next * (Math.PI * 2 / n);
+      ringTarget = -next * (Math.PI * 2 / n);
       if (instant) ringRot = ringTarget;
       return index;
     }
     pending = next;
-    ringTarget = next * (Math.PI * 2 / n);
+    ringTarget = -next * (Math.PI * 2 / n);
     if (instant) {
       index = next;
       pending = -1;
@@ -85297,10 +85320,10 @@ function createArMenu(THREE, opts = {}) {
     modelSpin.rotation.y += dt2 * 0.45;
     icons.forEach((ic2) => {
       const on3 = ic2.i === index;
-      const want = on3 ? 1.38 : 1;
+      const want = on3 ? 1.4 : 1;
       const s = ic2.mesh.scale.x + (want - ic2.mesh.scale.x) * Math.min(1, dt2 * 8);
       ic2.mesh.scale.setScalar(s);
-      ic2.hold.position.y += ((on3 ? 0.09 : 0.03) - ic2.hold.position.y) * Math.min(1, dt2 * 8);
+      ic2.hold.position.y += ((on3 ? 0.055 : 0.04) - ic2.hold.position.y) * Math.min(1, dt2 * 8);
       if (camera) {
         ic2.mesh.lookAt(camera.position);
       } else {
@@ -85309,8 +85332,9 @@ function createArMenu(THREE, opts = {}) {
     });
     if (camera) {
       bubble.lookAt(camera.position);
-      const lift = 0.4;
-      bubble.position.y += (lift - bubble.position.y) * Math.min(1, dt2 * 6);
+      bubble.position.x = 0;
+      bubble.position.y = 0.1;
+      bubble.position.z = radius + 0.22;
     }
   };
   const projectIcons = (camera, width, height) => {
@@ -85348,6 +85372,9 @@ function createArMenu(THREE, opts = {}) {
     bubble.material.map?.dispose();
     bubble.material.dispose();
     bubble.geometry.dispose();
+    glow.material.map?.dispose();
+    glow.material.dispose();
+    glow.geometry.dispose();
   };
   return {
     root,
@@ -85655,9 +85682,10 @@ async function start(container, opts = {}) {
   const arMenu = createArMenu(three_module_exports, {
     items: ITEMS,
     showCard: false,
-    radius: 0.72,
-    disc: 0.11,
-    modelY: 0.02
+    radius: 0.62,
+    disc: 0.08,
+    modelY: 0.28,
+    modelTilt: -0.18
   });
   arMenu.root.rotation.x = Math.PI / 2;
   root.add(arMenu.root);
