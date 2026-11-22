@@ -1300,9 +1300,24 @@ function stopCamera({ keepStill = false } = {}) {
   updateCamUI();
 }
 
+function hardStopVideoEl(el) {
+  if (!el) return;
+  try { el.pause(); } catch {}
+  try {
+    if (el.srcObject) el.srcObject.getTracks().forEach((tr) => { try { tr.stop(); } catch {} });
+  } catch {}
+  el.srcObject = null;
+}
+
 async function releaseCameras({ keepStill = false } = {}) {
   stopCamera({ keepStill });
   assembly?.stopScanStream?.();
+  hardStopVideoEl(video);
+  hardStopVideoEl(videoFront);
+  hardStopVideoEl($('#scanVideo'));
+  // iPhone 必須等前置軌道真的結束，後鏡頭 getUserMedia 才不會拿到黑畫面或 NotReadableError
+  const wait = isIOS ? 350 : 80;
+  await new Promise((r) => setTimeout(r, wait));
 }
 
 async function acquireCameras(preferred) {
@@ -1804,45 +1819,183 @@ function scheduleTrackWarmup() {
   else Promise.resolve(mpPrefetchP || prefetchMpAssets(false)).then(afterMp, afterMp);
 }
 
+function setTrackStatus(msg, { error = false } = {}) {
+  const el = $('#trackStatus');
+  if (el) {
+    el.textContent = msg || '';
+    el.classList.toggle('err', !!error);
+  }
+  state.trackStatus = msg || '';
+  state.trackStatusError = !!error;
+}
+
+function explainTrackError(err) {
+  const name = err?.name || '';
+  const msg = String(err?.message || err || '').trim();
+  if (name === 'NotAllowedError' || /permission|denied|not allowed|權限/i.test(msg)) {
+    return '無法開啟後鏡頭：權限被拒。請到設定允許 Safari 使用相機，再按「開啟相機」。';
+  }
+  if (name === 'NotReadableError' || name === 'AbortError' || /busy|in use|readable|device/i.test(msg)) {
+    return '無法開啟後鏡頭：相機忙碌（前鏡頭可能尚未釋放）。請再按「開啟相機」。';
+  }
+  if (name === 'NotFoundError' || /not found|no device/i.test(msg)) {
+    return '找不到後鏡頭。';
+  }
+  if (name === 'SecurityError' || /secure|https/i.test(msg)) {
+    return '此頁必須在 HTTPS 下才能開相機。';
+  }
+  if (name === 'NotSupportedError') return '這個瀏覽器不支援後鏡頭。';
+  if (msg && msg !== 'undefined' && msg !== '[object Object]') {
+    return '無法開啟後鏡頭：' + msg;
+  }
+  return '無法開啟後鏡頭（權限被拒、相機忙碌，或畫面無法播放）。請再按「開啟相機」。';
+}
+
+function prepareTrackMedia(root) {
+  const videos = [...(root?.querySelectorAll?.('video') || [])];
+  for (const v of videos) {
+    v.muted = true;
+    v.defaultMuted = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    v.setAttribute('playsinline', '');
+    v.setAttribute('webkit-playsinline', '');
+    v.setAttribute('muted', '');
+    v.setAttribute('autoplay', '');
+    v.style.zIndex = '0';
+    v.style.objectFit = 'cover';
+    v.style.opacity = '1';
+    v.style.visibility = 'visible';
+  }
+  return videos[0] || null;
+}
+
+function watchTrackMedia(root) {
+  prepareTrackMedia(root);
+  const mo = new MutationObserver(() => prepareTrackMedia(root));
+  mo.observe(root, { childList: true, subtree: true });
+  return mo;
+}
+
+async function ensureTrackVideoLive(session, timeout = 2500) {
+  const mind = session?._internal?.mindarThree;
+  const v = mind?.video || prepareTrackMedia($('#trackAr'));
+  if (!v) throw Object.assign(new Error('MindAR 沒有建立鏡頭畫面'), { name: 'TrackVideoMissing' });
+  prepareTrackMedia($('#trackAr'));
+  try { await v.play(); } catch (e) {
+    const err = new Error('畫面尚未播放（iPhone 需點「開啟相機」）');
+    err.name = 'TrackVideoNotPlaying';
+    err.cause = e;
+    throw err;
+  }
+  const t0 = performance.now();
+  while (performance.now() - t0 < timeout) {
+    if (v.videoWidth > 0 && v.readyState >= 2 && !v.paused) return v;
+    await new Promise((r) => setTimeout(r, 80));
+    try { await v.play(); } catch {}
+  }
+  if (v.paused) {
+    const err = new Error('畫面尚未播放（video 被暫停）');
+    err.name = 'TrackVideoNotPlaying';
+    throw err;
+  }
+  if (!v.videoWidth) {
+    const err = new Error('鏡頭畫面尺寸為 0');
+    err.name = 'TrackVideoSizeZero';
+    throw err;
+  }
+  return v;
+}
+
+function showTrackCameraPrompt() {
+  document.body.classList.add('track-error');
+  document.body.classList.remove('searching', 'found');
+  $('#trackIntro')?.classList.remove('hide');
+  const start = $('#trackStart');
+  if (start) { start.disabled = false; start.textContent = '開啟相機'; }
+}
+
+function clearTrackCameraPrompt() {
+  document.body.classList.remove('track-error');
+}
+
 async function startTrackSession() {
   if (trackBusy) return;
   const start = $('#trackStart');
   const txt = $('#trackLoadTxt');
+  let watch = null;
   try {
     trackBusy = true;
+    clearTrackCameraPrompt();
+    setTrackStatus('正在開啟後鏡頭…');
     if (start) { start.disabled = true; start.textContent = '啟動中…'; }
+    await releaseCameras({ keepStill: false });
+    const box = $('#trackAr');
+    if (!box) throw new Error('找不到追蹤畫面容器');
+    // 等分頁版面算出尺寸，避免 MindAR 把畫面排成 0 高
+    box.style.display = 'block';
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    if (box.clientWidth < 2 || box.clientHeight < 2) {
+      throw new Error('追蹤畫面容器尚未展開（' + box.clientWidth + '×' + box.clientHeight + '）');
+    }
     await loadTrackModule();
     if (!trackAssets) await preloadTrack();
     if (!trackAssets) throw new Error('資源尚未就緒');
-    trackSession = await trackMod.start($('#trackAr'), {
-      imageTargetSrc: trackAssets.mindBuf,
-      model: trackAssets.glbBuf,
-      parts: trackAssets.parts,
-      cycleOnTap: true,
-      onSelect: (item, index) => {
-        const name = $('#trackLabel .name'); if (name) name.textContent = item.zh;
-        const spec = $('#trackLabel .spec'); if (spec) spec.textContent = item.spec || '';
-        syncTrackPips(index);
-        state.trackItem = item.zh;
-      },
-      onFound: () => { document.body.classList.add('found'); document.body.classList.remove('searching'); state.trackFound = true; },
-      onLost: () => { document.body.classList.remove('found'); document.body.classList.add('searching'); state.trackFound = false; },
-    });
+    watch = watchTrackMedia(box);
+    try {
+      trackSession = await trackMod.start(box, {
+        imageTargetSrc: trackAssets.mindBuf,
+        model: trackAssets.glbBuf,
+        parts: trackAssets.parts,
+        cycleOnTap: true,
+        onSelect: (item, index) => {
+          const name = $('#trackLabel .name'); if (name) name.textContent = item.zh;
+          const spec = $('#trackLabel .spec'); if (spec) spec.textContent = item.spec || '';
+          syncTrackPips(index);
+          state.trackItem = item.zh;
+        },
+        onFound: () => {
+          document.body.classList.add('found');
+          document.body.classList.remove('searching');
+          state.trackFound = true;
+          setTrackStatus('已找到卡片');
+        },
+        onLost: () => {
+          document.body.classList.remove('found');
+          document.body.classList.add('searching');
+          state.trackFound = false;
+          setTrackStatus('請將後鏡頭對準卡片');
+        },
+      });
+    } catch (e) {
+      // MindAR 有時 reject() 沒帶 Error
+      throw (e && (e.message || e.name)) ? e : Object.assign(new Error('MindAR 啟動失敗'), { name: 'TrackStartFailed', cause: e });
+    }
+    const live = await ensureTrackVideoLive(trackSession);
+    state.trackVideoSize = { w: live.videoWidth, h: live.videoHeight };
     $('#trackIntro')?.classList.add('hide');
     document.body.classList.add('searching');
-    document.body.classList.remove('found');
+    document.body.classList.remove('found', 'track-error');
     state.trackOn = true;
     state.camPermitted = true;
     state.trackCamAllowed = true;
     syncTrackPips(0);
+    setTrackStatus('後鏡頭已開啟。請將鏡頭對準卡片（資源已預載，偵測到就會立刻出現模型）。');
   } catch (e) {
     console.warn(e);
-    toast('無法開啟圖像追蹤：' + (e.message || e.name || e) + '。請確認已允許相機權限。');
-    if (txt) txt.textContent = '無法開啟相機：' + (e.message || e.name || e);
+    const why = explainTrackError(e);
+    setTrackStatus(why, { error: true });
+    toast(why);
+    if (txt) txt.textContent = why;
     if (start) { start.disabled = false; start.textContent = '開啟相機'; }
-    $('#trackIntro')?.classList.remove('hide');
+    showTrackCameraPrompt();
     state.trackOn = false;
+    try { await stopTrackSession(); } catch {}
+    $('#trackIntro')?.classList.remove('hide');
   } finally {
+    try { watch?.disconnect(); } catch {}
+    // 保持最後一次對 video 的屬性修正
+    prepareTrackMedia($('#trackAr'));
     trackBusy = false;
   }
 }
@@ -1866,12 +2019,22 @@ async function enterTrackMode() {
   const tEl = $('#docTitle'); if (tEl) tEl.textContent = '圖像追蹤';
   const n = $('#deviceName'); if (n) n.textContent = '對準卡片，轉動切換零件';
   resetTrackHud();
-  const ready = !!trackAssets;
+  setTrackStatus(trackAssets ? '資源已就緒。正在準備後鏡頭…' : '正在預載追蹤資源…');
   const tEnter = performance.now();
   await preloadTrack().catch(() => {});
   state.trackEnterToReadyMs = Math.round(performance.now() - tEnter);
-  if (trackAssets && (state.camPermitted || state.trackCamAllowed) && !trackSession && !trackBusy) {
+  const canAuto = !!(trackAssets && (state.camPermitted || state.trackCamAllowed) && !trackSession && !trackBusy);
+  if (canAuto) {
     await startTrackSession();
+    if (!state.trackOn) {
+      setTrackStatus(state.trackStatus || '自動開啟後鏡頭失敗，請按「開啟相機」。', { error: true });
+      showTrackCameraPrompt();
+    }
+  } else {
+    setTrackStatus('資源已預載。請按「開啟相機」以開啟後鏡頭（iPhone 需你親自點按一次）。');
+    showTrackCameraPrompt();
+    document.body.classList.remove('track-error'); // 正常提示，用 intro 大按鈕即可
+    $('#trackIntro')?.classList.remove('hide');
   }
 }
 
@@ -1933,6 +2096,7 @@ document.querySelectorAll('#modeTabs [data-app-mode]').forEach((b) => {
   b.addEventListener('click', () => setAppMode(b.dataset.appMode));
 });
 $('#trackStart')?.addEventListener('click', () => startTrackSession());
+$('#trackRetry')?.addEventListener('click', () => startTrackSession());
 
 state.setAppMode = setAppMode;
 state.releaseCameras = releaseCameras;

@@ -121,20 +121,38 @@
   body.mode-track #trackPanel { display: block; }
   body.mode-track #gesture, body.mode-track footer, body.mode-track #pip, body.mode-track #camHint,
   body.mode-track #labels, body.mode-track #shade, body.mode-track #gl, body.mode-track #video,
-  body.mode-track #bgStill, body.mode-track #bgStillImg, body.mode-track #intro, body.mode-track #help { visibility: hidden; pointer-events: none; }
+  body.mode-track #bgStill, body.mode-track #bgStillImg, body.mode-track #intro, body.mode-track #help,
+  body.mode-track #videoFront { visibility: hidden; pointer-events: none; }
+  body.mode-track #gl, body.mode-track #video, body.mode-track #videoFront, body.mode-track #bgStill, body.mode-track #bgStillImg { display: none; }
   body.mode-assembly footer, body.mode-track footer { display: none; }
   body.mode-assembly #intro { visibility: hidden; pointer-events: none; }
   body.mode-assembly .demo-only { display: none !important; }
   body:not(.mode-assembly) .asm-only { display: none !important; }
   body:not(.mode-track) .track-only { display: none !important; }
   body.mode-track .demo-only { visibility: hidden; pointer-events: none; }
-  #trackAr { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
-  #trackAr video, #trackAr canvas { touch-action: none; }
+  #trackPanel { background: #000; }
+  #trackAr { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden;
+    background: transparent; isolation: isolate; z-index: 1; }
+  #trackAr video {
+    touch-action: none; z-index: 0 !important; object-fit: cover;
+    background: transparent; opacity: 1 !important; visibility: visible !important;
+  }
+  #trackAr canvas { touch-action: none; z-index: 1 !important; background: transparent; }
   #trackScan { position: absolute; inset: 0; z-index: 3; display: none; pointer-events: none;
     align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
   body.mode-track.searching #trackScan { display: flex; }
+  #trackStatus { position: absolute; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 52px);
+    z-index: 7; margin: 0; text-align: center; font-size: 13px; line-height: 1.45; color: #e8f0fa;
+    text-shadow: 0 1px 8px #000; pointer-events: none; min-height: 1.3em; }
+  #trackStatus.err { color: #ffd2a6; }
+  #trackRetry { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 96px);
+    transform: translateX(-50%); z-index: 7; display: none; width: min(86vw, 360px); height: 52px;
+    border: 0; border-radius: 16px; background: linear-gradient(180deg, #3aa0ff, #1f6fd1);
+    color: #fff; font-size: 17px; font-weight: 700; font-family: inherit; cursor: pointer; }
+  body.mode-track.track-error #trackRetry { display: block; }
+  body.mode-track.track-error #trackIntro.hide { display: none; }
   .track-frame { width: min(68vw, 280px); aspect-ratio: 1; border: 2px solid rgba(58,160,255,.85);
-    border-radius: 18px; box-shadow: 0 0 0 200vmax rgba(0,0,0,.28); position: relative; }
+    border-radius: 18px; box-shadow: 0 0 0 200vmax rgba(0,0,0,.18); position: relative; }
   .track-frame::before, .track-frame::after { content: ""; position: absolute; width: 22px; height: 22px; border: 3px solid #e8ba4a; }
   .track-frame::before { top: -3px; left: -3px; border-right: 0; border-bottom: 0; border-radius: 8px 0 0 0; }
   .track-frame::after { bottom: -3px; right: -3px; border-left: 0; border-top: 0; border-radius: 0 0 8px 0; }
@@ -325,6 +343,8 @@
 
 <div id="trackPanel">
   <div id="trackAr" aria-hidden="true"></div>
+  <p id="trackStatus" role="status"></p>
+  <button type="button" id="trackRetry">開啟相機</button>
   <div id="trackScan">
     <div class="track-frame"></div>
     <b>請將後鏡頭對準卡片</b>

@@ -257,12 +257,43 @@ try {
     // Start with fake camera should not throw
     await p.click('#trackStart');
     await sleep(4000);
-    const after = await p.evaluate(() => ({
-      on: !!__demo.trackOn,
-      introHidden: document.querySelector('#trackIntro').classList.contains('hide'),
-      err: document.querySelector('#trackLoadTxt')?.textContent || '',
-    }));
-    ok('track start() ran (session or visible error)', after.on || /無法|失敗|權限/.test(after.err) || after.introHidden, after);
+    const after = await p.evaluate(() => {
+      const ar = document.querySelector('#trackAr');
+      const v = ar?.querySelector('video');
+      const cs = v ? getComputedStyle(v) : null;
+      const arCs = ar ? getComputedStyle(ar) : null;
+      return {
+        on: !!__demo.trackOn,
+        introHidden: document.querySelector('#trackIntro').classList.contains('hide'),
+        err: document.querySelector('#trackLoadTxt')?.textContent || '',
+        status: document.querySelector('#trackStatus')?.textContent || '',
+        hasStatus: !!document.querySelector('#trackStatus'),
+        hasVideo: !!v,
+        vw: v?.videoWidth || 0,
+        paused: !!v?.paused,
+        opacity: cs?.opacity,
+        vis: cs?.visibility,
+        display: cs?.display,
+        z: cs?.zIndex,
+        arBg: arCs?.backgroundColor,
+        iso: arCs?.isolation,
+        bodyErr: document.body.classList.contains('track-error'),
+      };
+    });
+    ok('track start() ran (session or visible error)', after.on || /無法|失敗|權限|鏡頭/.test(after.err + after.status) || after.introHidden || after.bodyErr, after);
+    ok('track status line exists', after.hasStatus, after);
+    if (after.on) {
+      ok('MindAR video is visible (not z-index -2 / hidden)', after.hasVideo && after.vw > 0 && after.opacity === '1' && after.vis === 'visible' && after.display !== 'none' && String(after.z) !== '-2', after);
+      ok('#trackAr does not cover video with opaque background', after.iso === 'isolate' || after.arBg === 'rgba(0, 0, 0, 0)' || after.arBg === 'transparent', after);
+    } else {
+      ok('failed start shows on-screen reason + 開啟相機', after.bodyErr || /鏡頭|權限|失敗|播放/.test(after.status), after);
+      const shown = await p.evaluate(() => {
+        const intro = document.querySelector('#trackIntro');
+        const btn = document.querySelector('#trackStart, #trackRetry');
+        return { introShown: intro && !intro.classList.contains('hide'), btn: btn?.textContent };
+      });
+      ok('failed start keeps 開啟相機 visible', shown.introShown && /開啟相機/.test(shown.btn || ''), shown);
+    }
 
     await p.evaluate(() => window.__demo.setAppMode('demo'));
     await p.waitForFunction(() => window.__demo.appMode === 'demo');
