@@ -169,13 +169,14 @@ function frame(now, xrFrame) {
 
 // ---------- 音效（整首歌從頭循環；平時小聲，展開變大聲；開合都有撞擊） ----------
 const SOUND_KEY = 'gesture-demo-sound';
-const QUIET_GAIN = 0.22;   // 收合／待機約 22%
-const FULL_GAIN = 1.0;
+const QUIET_GAIN = 0.11;   // 收合／待機約 10–12%
+const FULL_GAIN = 0.60;    // 展開峰值約 60%
 const SWELL = 1.2;         // 開合音量升降時間
 const SNAP_AT = 0.08;
 const THUD_OPEN = 0.15;    // 展開：零件開始彈出時
 const THUD_CLOSE = 0.4;    // 收合：零件合上、對準動畫
-const WHOOSH_GAIN = 0.3;   // 輕一點，避免蓋過音樂
+const WHOOSH_GAIN = 0.18;  // 隨音樂一起略降，避免蓋過
+const THUD_GAIN = 0.6;
 const KEY0 = 1.6, RIM0 = 1.2;
 
 const music = new Audio(rel('audio/explode.mp3'));
@@ -192,6 +193,7 @@ state.soundOn = localStorage.getItem(SOUND_KEY) !== '0';
 state.music = music;
 state.sound = snd;
 state.punch = 0;
+state.QUIET_GAIN = QUIET_GAIN; state.FULL_GAIN = FULL_GAIN;
 
 function ensureAudio() {
   if (snd.ctx) return;
@@ -292,7 +294,7 @@ function scheduleMotionSfx(isExplode) {
   playBufAt(snd.whooshBuf, t0, WHOOSH_GAIN);
   snd.sfx.whooshAt = performance.now();
   snd.sfx.impactAt = 0;
-  playBufAt(snd.thudBuf, Math.max(t0, t0 + heardAt - lat), 1);
+  playBufAt(snd.thudBuf, Math.max(t0, t0 + heardAt - lat), THUD_GAIN);
   snd.thudWhen = t0 + heardAt;
 }
 
@@ -680,8 +682,10 @@ async function initARButton() {
 initARButton();
 
 // ---------- 相機 + MediaPipe ----------
-let landmarker = null, video = $('#video'), lastVideoTime = -1, lastDetect = 0;
+let landmarker = null, video = $('#video'), videoFront = $('#videoFront'), bgStill = $('#bgStill');
+let trackVideo = video, lastVideoTime = -1, lastDetect = 0;
 const hud = $('#hand'), hctx = hud.getContext('2d');
+const camHint = $('#camHint'), modeSheet = $('#modeSheet');
 async function initLandmarker() {
   if (landmarker) return landmarker;
   $('#loadtxt').textContent = '載入手勢辨識模型…'; $('#loading').classList.remove('hide');
@@ -694,8 +698,13 @@ async function initLandmarker() {
   return landmarker;
 }
 const CAM_KEY = 'gesture-demo-camera';
+const CAM_MODE_KEY = 'gesture-demo-cam-mode';
 try { if (localStorage.getItem(CAM_KEY) === 'environment') state.facing = 'environment'; } catch {}
+try { if (localStorage.getItem(CAM_MODE_KEY) === 'dual') state.camMode = 'dual'; } catch {}
+if (!state.camMode) state.camMode = 'single';
 state.deviceId = null;
+state.rearStream = null;
+state.dualKind = null;
 let videoInputs = [];
 
 function facingFromLabel(label) {
@@ -705,18 +714,84 @@ function facingFromLabel(label) {
   return null;
 }
 
-function applyMirror() {
-  // 只有前鏡頭鏡像預覽；後鏡頭不鏡像，手勢座標也不左右對調，旋轉方向才會跟畫面對得上
-  video.classList.toggle('mirror', state.facing === 'user');
+function trackOf(stream) { return stream?.getVideoTracks?.()[0] || null; }
+function trackSettings(stream) { return trackOf(stream)?.getSettings?.() || {}; }
+function facingOf(stream) {
+  const st = trackSettings(stream);
+  if (st.facingMode === 'user' || st.facingMode === 'environment') return st.facingMode;
+  const dev = videoInputs.find((d) => d.deviceId === st.deviceId);
+  return facingFromLabel(dev?.label) || null;
+}
+function trackAlive(stream) {
+  const t = trackOf(stream);
+  return !!(t && t.readyState === 'live' && t.enabled);
+}
+function stopStream(stream) {
+  stream?.getTracks?.().forEach((tr) => { try { tr.stop(); } catch {} });
+}
+function sameCamera(a, b) {
+  if (!a || !b) return false;
+  const ia = trackSettings(a).deviceId, ib = trackSettings(b).deviceId;
+  if (ia && ib && ia === ib) return true;
+  const fa = facingOf(a), fb = facingOf(b);
+  return !!(fa && fb && fa === fb);
 }
 
-function updateFlipBtn() {
-  const btn = $('#btnFlip');
-  if (!btn) return;
-  btn.textContent = '🔄 切換鏡頭';
-  btn.title = '切換鏡頭';
-  btn.hidden = !state.camOn || videoInputs.length < 2;
+function applyMirror() {
+  if (state.camMode === 'dual') {
+    video.classList.remove('mirror');
+    videoFront.classList.add('mirror');
+  } else {
+    video.classList.toggle('mirror', state.facing === 'user');
+    videoFront.classList.remove('mirror');
+  }
 }
+
+function persistCam() {
+  try { localStorage.setItem(CAM_KEY, state.facing); } catch {}
+  try { localStorage.setItem(CAM_MODE_KEY, state.camMode); } catch {}
+}
+
+function hintText() {
+  if (!state.camOn) return '';
+  if (state.camMode === 'dual' && state.dualKind === 'live') return '目前：雙鏡頭（前置控制手勢，後置即時背景）';
+  if (state.camMode === 'dual' && state.dualKind === 'still') return '目前：雙鏡頭（前置控制手勢，後置靜態背景）。此裝置無法同時開啟兩顆鏡頭。';
+  if (state.facing === 'environment') return '目前：後鏡頭手勢';
+  return '目前：前鏡頭手勢';
+}
+
+function updateCamUI() {
+  const on = !!state.camOn;
+  const dual = on && state.camMode === 'dual';
+  const still = dual && state.dualKind === 'still';
+  document.body.classList.toggle('cam', on);
+  document.body.classList.toggle('dual', dual);
+  document.body.classList.toggle('dual-still', still);
+  const flip = $('#btnFlip');
+  if (flip) {
+    flip.textContent = '🔄 切換鏡頭';
+    flip.title = '切換鏡頭';
+    flip.hidden = !on || dual || videoInputs.length < 2;
+  }
+  const modeBtn = $('#btnMode');
+  if (modeBtn) {
+    modeBtn.hidden = !on;
+    modeBtn.textContent = dual ? '🎥 雙鏡頭' : '🎥 鏡頭模式';
+    modeBtn.setAttribute('aria-expanded', modeSheet?.classList.contains('show') ? 'true' : 'false');
+  }
+  const reshoot = $('#btnReshoot');
+  if (reshoot) reshoot.hidden = !still;
+  if (camHint) camHint.textContent = hintText();
+  if (modeSheet) {
+    for (const b of modeSheet.querySelectorAll('[data-mode]')) {
+      b.setAttribute('aria-current', b.dataset.mode === state.camMode ? 'true' : 'false');
+    }
+  }
+  applyMirror();
+  state.trackSrc = (state.camMode === 'dual') ? 'front' : 'main';
+}
+
+function closeModeSheet() { modeSheet?.classList.remove('show'); }
 
 async function refreshVideoInputs() {
   try {
@@ -724,12 +799,108 @@ async function refreshVideoInputs() {
     videoInputs = list.filter((d) => d.kind === 'videoinput');
   } catch { videoInputs = []; }
   state.cameraCount = videoInputs.length;
-  updateFlipBtn();
+  updateCamUI();
+}
+
+function pickDevice(facing) {
+  return videoInputs.find((d) => facingFromLabel(d.label) === facing) || null;
+}
+
+async function openFacingStream(facing, extra = {}) {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('這個瀏覽器不支援相機（需要 HTTPS 或 localhost）');
+  const tryGet = (video) => navigator.mediaDevices.getUserMedia({ audio: false, video });
+  const base = { width: { ideal: extra.width || 640 }, height: { ideal: extra.height || 480 } };
+  const dev = pickDevice(facing);
+  if (dev?.deviceId) {
+    try { return await tryGet({ ...base, deviceId: { exact: dev.deviceId } }); }
+    catch { /* 改試 facingMode */ }
+  }
+  try { return await tryGet({ ...base, facingMode: { exact: facing } }); }
+  catch {}
+  return tryGet({ ...base, facingMode: { ideal: facing } });
+}
+
+function waitEvent(el, ev, ms) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error('等候畫面逾時')), ms);
+    const ok = () => { clearTimeout(t); el.removeEventListener(ev, ok); res(); };
+    el.addEventListener(ev, ok);
+  });
+}
+
+async function attachVideo(el, stream) {
+  el.srcObject = stream;
+  el.muted = true;
+  el.playsInline = true;
+  try { await el.play(); } catch {}
+  if (el.readyState >= 2) return;
+  try { await waitEvent(el, 'loadeddata', 2500); } catch {}
+}
+
+async function waitTrackReady(stream, ms = 1200) {
+  const tr = trackOf(stream);
+  if (!tr) return false;
+  if (tr.readyState !== 'live') return false;
+  if (!tr.muted) return true;
+  return await new Promise((res) => {
+    const done = (v) => { clearTimeout(t); tr.removeEventListener('unmute', onUnmute); res(v); };
+    const onUnmute = () => done(true);
+    const t = setTimeout(() => done(tr.readyState === 'live'), ms);
+    tr.addEventListener('unmute', onUnmute, { once: true });
+  });
+}
+
+function isMostlyBlack(el) {
+  const w = el.videoWidth, h = el.videoHeight;
+  if (!w || !h) return false;
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 24;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  try { ctx.drawImage(el, 0, 0, 32, 24); } catch { return false; }
+  const data = ctx.getImageData(0, 0, 32, 24).data;
+  let max = 0, sum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const l = data[i] + data[i + 1] + data[i + 2];
+    if (l > max) max = l;
+    sum += l;
+  }
+  return max < 12 && sum < 32 * 24 * 3 * 0.02;
+}
+
+async function videoLooksLive(el, samples = 3) {
+  if (el.readyState < 2) {
+    try { await waitEvent(el, 'loadeddata', 1500); } catch { return false; }
+  }
+  await new Promise((r) => setTimeout(r, 80));
+  let black = 0, ready = 0;
+  for (let i = 0; i < samples; i++) {
+    if (el.videoWidth) {
+      ready++;
+      if (isMostlyBlack(el)) black++;
+    }
+    if (i < samples - 1) await new Promise((r) => setTimeout(r, 50));
+  }
+  if (!ready) return trackAlive(el.srcObject);
+  return black < samples;
+}
+
+function captureStill(el) {
+  const w = el.videoWidth || 1280, h = el.videoHeight || 720;
+  bgStill.width = w; bgStill.height = h;
+  const ctx = bgStill.getContext('2d');
+  ctx.drawImage(el, 0, 0, w, h);
+  state.stillSize = { w, h };
+}
+
+function setTrackSource(el) {
+  trackVideo = el;
+  lastVideoTime = -1;
+  lastDetect = 0;
 }
 
 async function openCameraStream() {
   const base = { width: { ideal: 640 }, height: { ideal: 480 } };
-  const tryGet = (video) => navigator.mediaDevices.getUserMedia({ audio: false, video });
+  const tryGet = (v) => navigator.mediaDevices.getUserMedia({ audio: false, video: v });
   if (state.deviceId) {
     try { return await tryGet({ ...base, deviceId: { exact: state.deviceId } }); }
     catch { state.deviceId = null; }
@@ -738,38 +909,148 @@ async function openCameraStream() {
 }
 
 async function startCamera() {
-  stopCamera(); // 先關掉舊軌道再要新鏡頭
+  stopCamera();
+  state.camMode = 'single';
+  state.dualKind = null;
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('這個瀏覽器不支援相機（需要 HTTPS 或 localhost）');
   state.stream = await openCameraStream();
-  const track = state.stream.getVideoTracks()[0];
+  const track = trackOf(state.stream);
   const st = track?.getSettings?.() || {};
   if (st.facingMode === 'user' || st.facingMode === 'environment') state.facing = st.facingMode;
   if (st.deviceId) state.deviceId = st.deviceId;
-  video.srcObject = state.stream; await video.play();
-  applyMirror();
-  document.body.classList.add('cam');
-  state.camOn = true; lastVideoTime = -1;
+  await attachVideo(video, state.stream);
+  setTrackSource(video);
+  state.camOn = true;
   ignoreGesturesUntil = performance.now() + 800;
   stable = { g: 'none', n: 0 };
-  try { localStorage.setItem(CAM_KEY, state.facing); } catch {}
+  persistCam();
   await refreshVideoInputs();
   if (!st.facingMode && state.deviceId) {
     const dev = videoInputs.find((d) => d.deviceId === state.deviceId);
     const f = facingFromLabel(dev?.label);
-    if (f) { state.facing = f; applyMirror(); try { localStorage.setItem(CAM_KEY, state.facing); } catch {} }
+    if (f) { state.facing = f; persistCam(); }
+  }
+  updateCamUI();
+}
+
+async function startDualStill(existingRear) {
+  state.camMode = 'dual';
+  state.dualKind = 'still';
+  state.facing = 'user';
+  let rear = existingRear && trackAlive(existingRear) ? existingRear : null;
+  try {
+    if (!rear) rear = await openFacingStream('environment', { width: 1280, height: 720 });
+    await attachVideo(video, rear);
+    await new Promise((r) => setTimeout(r, 180));
+    if (video.videoWidth) captureStill(video);
+    else throw new Error('無法擷取後置畫面');
+  } finally {
+    stopStream(rear);
+    if (video.srcObject === rear) video.srcObject = null;
+  }
+  const front = await openFacingStream('user');
+  await attachVideo(videoFront, front);
+  state.stream = front;
+  state.rearStream = null;
+  const fst = trackSettings(front);
+  if (fst.deviceId) state.deviceId = fst.deviceId;
+  setTrackSource(videoFront);
+  state.camOn = true;
+  ignoreGesturesUntil = performance.now() + 800;
+  stable = { g: 'none', n: 0 };
+  persistCam();
+  await refreshVideoInputs();
+  updateCamUI();
+}
+
+async function startDualCamera() {
+  stopCamera();
+  state.camMode = 'dual';
+  state.dualKind = null;
+  state.facing = 'user';
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('這個瀏覽器不支援相機（需要 HTTPS 或 localhost）');
+  // 先要一次權限，才讀得到鏡頭名稱
+  try { await refreshVideoInputs(); } catch {}
+
+  let rear = null, front = null;
+  try {
+    rear = await openFacingStream('environment', { width: 1280, height: 720 });
+    front = await openFacingStream('user');
+  } catch (e) {
+    if (rear && !front) {
+      try { await startDualStill(rear); return; }
+      catch (e2) { stopStream(rear); throw e2; }
+    }
+    stopStream(rear); stopStream(front);
+    throw e;
+  }
+
+  if (sameCamera(rear, front)) {
+    stopStream(rear); stopStream(front);
+    toast('找不到獨立的後鏡頭，已改用單鏡頭手勢');
+    state.facing = 'user';
+    await startCamera();
+    return;
+  }
+
+  await attachVideo(video, rear);
+  await attachVideo(videoFront, front);
+  await waitTrackReady(rear);
+  await waitTrackReady(front);
+  const rearOk = trackAlive(rear) && await videoLooksLive(video);
+  const frontOk = trackAlive(front) && await videoLooksLive(videoFront);
+
+  if (rearOk && frontOk) {
+    state.rearStream = rear;
+    state.stream = front;
+    state.dualKind = 'live';
+    const fst = trackSettings(front);
+    if (fst.deviceId) state.deviceId = fst.deviceId;
+    setTrackSource(videoFront);
+    state.camOn = true;
+    ignoreGesturesUntil = performance.now() + 800;
+    stable = { g: 'none', n: 0 };
+    persistCam();
+    await refreshVideoInputs();
+    updateCamUI();
+    return;
+  }
+
+  // 第二路把第一路擠掉、黑畫面、或其中一路失敗 → 改拍靜態背景
+  stopStream(front);
+  videoFront.srcObject = null;
+  if (!trackAlive(rear) || !rearOk) {
+    stopStream(rear);
+    if (video.srcObject === rear) video.srcObject = null;
+    rear = null;
+  }
+  try {
+    await startDualStill(rear);
+  } catch (e) {
+    stopStream(rear); stopStream(front);
+    throw e;
   }
 }
 
 function stopCamera() {
-  state.stream?.getTracks().forEach((t) => t.stop());
-  state.stream = null; state.camOn = false; document.body.classList.remove('cam');
+  stopStream(state.stream);
+  stopStream(state.rearStream);
+  state.stream = null;
+  state.rearStream = null;
+  state.camOn = false;
+  state.dualKind = null;
+  if (video.srcObject) video.srcObject = null;
+  if (videoFront?.srcObject) videoFront.srcObject = null;
+  document.body.classList.remove('cam', 'dual', 'dual-still');
+  closeModeSheet();
+  updateCamUI();
 }
 
 async function flipCamera() {
-  if (!state.camOn) return;
+  if (!state.camOn || state.camMode === 'dual') return;
   await refreshVideoInputs();
-  if (videoInputs.length < 2) { updateFlipBtn(); toast('這個裝置只有一個鏡頭'); return; }
-  const prevId = state.deviceId || state.stream?.getVideoTracks?.()[0]?.getSettings?.()?.deviceId || '';
+  if (videoInputs.length < 2) { updateCamUI(); toast('這個裝置只有一個鏡頭'); return; }
+  const prevId = state.deviceId || trackSettings(state.stream).deviceId || '';
   const nextFacing = state.facing === 'user' ? 'environment' : 'user';
   const cycleFrom = (id) => {
     const i = Math.max(0, videoInputs.findIndex((d) => d.deviceId === id));
@@ -792,13 +1073,99 @@ async function flipCamera() {
   }
 }
 
-async function enableGestures() {
-  try { await Promise.all([initLandmarker(), startCamera()]); setStatus('none'); }
-  catch (e) { console.warn(e); $('#loading').classList.add('hide'); toast('無法開啟相機：' + (e.message || e.name) + '。已切換成觸控模式'); setStatus('nocam'); }
+async function setCamMode(mode) {
+  closeModeSheet();
+  if (mode !== 'single' && mode !== 'dual') return;
+  if (state.camOn && state.camMode === mode && (mode !== 'dual' || state.dualKind)) return;
+  state.camMode = mode;
+  persistCam();
+  if (!state.camOn) { updateCamUI(); return; }
+  try {
+    if (mode === 'dual') await startDualCamera();
+    else {
+      state.facing = 'user';
+      state.deviceId = null;
+      await startCamera();
+    }
+    setStatus('none');
+  } catch (e) {
+    console.warn(e);
+    toast((mode === 'dual' ? '無法開啟雙鏡頭：' : '無法開啟相機：') + (e.message || e.name));
+  }
+}
+
+async function reshootBackground() {
+  if (!state.camOn || state.camMode !== 'dual') return;
+  const reshoot = $('#btnReshoot');
+  if (reshoot) reshoot.disabled = true;
+  toast('正在重拍後置背景…');
+  const keepFront = state.stream;
+  stopStream(keepFront);
+  state.stream = null;
+  if (videoFront.srcObject === keepFront) videoFront.srcObject = null;
+  stopStream(state.rearStream);
+  state.rearStream = null;
+  try {
+    await startDualStill(null);
+    toast('背景已更新');
+    setStatus('none');
+  } catch (e) {
+    console.warn(e);
+    toast('重拍失敗：' + (e.message || e.name) + '。改回前鏡頭手勢');
+    try { state.facing = 'user'; await startCamera(); } catch {}
+  } finally {
+    if (reshoot) reshoot.disabled = false;
+  }
+}
+
+async function enableGestures(preferred) {
+  if (preferred === 'dual' || preferred === 'single') state.camMode = preferred;
+  try {
+    await initLandmarker();
+    if (state.camMode === 'dual') await startDualCamera();
+    else await startCamera();
+    setStatus('none');
+  } catch (e) {
+    console.warn(e);
+    $('#loading').classList.add('hide');
+    toast('無法開啟相機：' + (e.message || e.name) + '。已切換成觸控模式');
+    setStatus('nocam');
+  }
 }
 $('#btnFlip').onclick = () => { flipCamera(); };
-$('#startCam').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); enableGestures(); };
+$('#btnMode').onclick = (e) => {
+  e.stopPropagation();
+  if (modeSheet.classList.contains('show')) closeModeSheet();
+  else { modeSheet.classList.add('show'); updateCamUI(); }
+};
+modeSheet?.querySelectorAll('[data-mode]').forEach((b) => {
+  b.onclick = (e) => { e.stopPropagation(); setCamMode(b.dataset.mode); };
+});
+document.addEventListener('click', () => closeModeSheet());
+$('#btnReshoot').onclick = () => { reshootBackground(); };
+$('#startCam').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); enableGestures('single'); };
+$('#startDual').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); enableGestures('dual'); };
 $('#startTouch').onclick = () => { $('#intro').classList.add('hide'); unlockAudio(); setStatus('nocam'); };
+
+state.setCamMode = setCamMode;
+state.reshootBackground = reshootBackground;
+state.debugCam = () => ({
+  mode: state.camMode, kind: state.dualKind, facing: state.facing, camOn: state.camOn,
+  frontLive: trackAlive(state.stream), rearLive: trackAlive(state.rearStream),
+  frontId: trackSettings(state.stream).deviceId || null,
+  rearId: trackSettings(state.rearStream).deviceId || null,
+  videoMirror: video.classList.contains('mirror'),
+  frontMirror: videoFront.classList.contains('mirror'),
+  reshootHidden: !!$('#btnReshoot')?.hidden,
+  flipHidden: !!$('#btnFlip')?.hidden,
+  modeHidden: !!$('#btnMode')?.hidden,
+  hint: camHint?.textContent || '',
+  still: !!(state.stillSize && bgStill?.width),
+  stillSize: state.stillSize || null,
+  trackSrc: state.trackSrc,
+  bodyDual: document.body.classList.contains('dual'),
+  bodyStill: document.body.classList.contains('dual-still'),
+});
 
 // 手勢判斷
 const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -818,12 +1185,13 @@ state.classify = (lm) => classify(lm).g;
 let stable = { g: 'none', n: 0 }, prevPalm = null, pinchRef = null;
 function detect(now) {
   if (ar.session || renderer.xr.isPresenting) return; // AR 進行中暫停手勢相機推論
-  if (!landmarker || video.readyState < 2 || now - lastDetect < 33) return;
-  if (video.currentTime === lastVideoTime) return; lastVideoTime = video.currentTime; lastDetect = now;
-  let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { console.warn(e); return; }
+  const src = trackVideo || video;
+  if (!landmarker || !src || src.readyState < 2 || now - lastDetect < 33) return;
+  if (src.currentTime === lastVideoTime) return; lastVideoTime = src.currentTime; lastDetect = now;
+  let res; try { res = landmarker.detectForVideo(src, now); } catch (e) { console.warn(e); return; }
   const lm = res.landmarks?.[0]; drawHand(lm);
   if (!lm) { stable = { g: 'none', n: 0 }; prevPalm = null; pinchRef = null; setStatus('none'); return; }
-  const mirror = state.facing === 'user';
+  const mirror = state.camMode === 'dual' || state.facing === 'user';
   const palm = { x: (lm[0].x + lm[5].x + lm[17].x) / 3, y: (lm[0].y + lm[5].y + lm[17].y) / 3 };
   if (mirror) palm.x = 1 - palm.x;
   const c = classify(lm);
@@ -848,7 +1216,7 @@ function setStatus(g) { if (state.gesture === g && g !== 'nocam') return; state.
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
 function drawHand(lm) {
   const w = hud.width, h = hud.height; hctx.clearRect(0, 0, w, h);
-  if (!lm) return; const m = state.facing === 'user';
+  if (!lm) return; const m = state.camMode === 'dual' || state.facing === 'user';
   const P = (p) => [(m ? 1 - p.x : p.x) * w, p.y * h];
   hctx.lineWidth = 3; hctx.strokeStyle = 'rgba(120,200,255,0.95)'; hctx.lineCap = 'round';
   for (const [a, b] of BONES) { const [x1, y1] = P(lm[a]), [x2, y2] = P(lm[b]); hctx.beginPath(); hctx.moveTo(x1, y1); hctx.lineTo(x2, y2); hctx.stroke(); }
@@ -861,4 +1229,4 @@ loadModel().then(() => { $('#loading').classList.add('hide'); state.modelReady =
   .catch((e) => { console.error(e); $('#loadtxt').textContent = '模型載入失敗：' + e.message; });
 // 測試用：?auto=cam / ?auto=touch 直接跳過開始畫面
 const auto = new URLSearchParams(location.search).get('auto');
-if (auto === 'cam') $('#startCam').click(); else if (auto === 'touch') $('#startTouch').click();
+if (auto === 'cam') $('#startCam').click(); else if (auto === 'dual') $('#startDual').click(); else if (auto === 'touch') $('#startTouch').click();
