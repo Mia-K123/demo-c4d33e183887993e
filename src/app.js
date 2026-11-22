@@ -160,81 +160,78 @@ function frame(now, xrFrame) {
     punch = 1; state.punch = 1;
     snd.sfx.impactAt = performance.now();
   }
-  if (snd.introBackWhen && snd.ctx && snd.ctx.currentTime >= snd.introBackWhen) {
-    snd.introBackWhen = 0;
-    if (!state.target && state.soundOn) startIntroLoop();
-  }
   if (punch > 0) { punch = Math.max(0, punch - dt * 5.5); if (punch < 0.03) punch = 0; state.punch = punch; }
-  tickIntroLoop();
   applyPunch(now);
   renderer.render(scene, camera);
 }
 
 
 
-// ---------- 音效（前奏輕聲循環；第一次展開跳到副歌高潮；收合有撞擊音效） ----------
-// 分析：50 ms RMS（全頻 + 300–3400 Hz 人聲帶）+ 128 BPM 拍點網格（前奏 onset ACF）。
-// 前奏 0.00–28.12s = 15 小節器樂；約 29.1s 起較安靜的主歌（人聲帶相對凸顯）；
-// 45.00s = 第 24 小節，全頻能量躍升約 +8 dB，副歌/高潮（人聲與編曲一起進來）。
+// ---------- 音效（整首歌從頭循環；平時小聲，展開變大聲；開合都有撞擊） ----------
 const SOUND_KEY = 'gesture-demo-sound';
-const INTRO_START = 0.00, INTRO_END = 28.12, CLIMAX = 45.00;
-const INTRO_GAIN = 0.4, MAIN_GAIN = 1.0, SNAP_AT = 0.08;
-const MUSIC_FADE_OUT = 0.4, THUD_AT = 0.4; // 撞擊與音樂切掉同一刻（約 0.4s）
-const BPM = 128, BAR = 60 / BPM * 4;          // 1.875s
-const XFADE = BAR;                             // 1 小節等功率交叉淡化，結束在 45.00 拍點
-const CLIMAX_CUE = CLIMAX - XFADE;             // 43.125s，淡入期間走到高潮正拍
-const INTRO_IN = 1.5;
+const QUIET_GAIN = 0.22;   // 收合／待機約 22%
+const FULL_GAIN = 1.0;
+const SWELL = 1.2;         // 開合音量升降時間
+const SNAP_AT = 0.08;
+const THUD_OPEN = 0.15;    // 展開：零件開始彈出時
+const THUD_CLOSE = 0.4;    // 收合：零件合上、對準動畫
+const WHOOSH_GAIN = 0.3;   // 輕一點，避免蓋過音樂
 const KEY0 = 1.6, RIM0 = 1.2;
 
-function makeAudioEl() {
-  const a = new Audio(rel('audio/explode.mp3'));
-  a.preload = 'auto'; a.playsInline = true; a.crossOrigin = 'anonymous';
-  a.setAttribute('playsinline', ''); a.loop = false;
-  return a;
-}
-const introEl = makeAudioEl(), mainEl = makeAudioEl();
+const music = new Audio(rel('audio/explode.mp3'));
+music.preload = 'auto'; music.playsInline = true; music.crossOrigin = 'anonymous';
+music.setAttribute('playsinline', ''); music.loop = true;
+
 const snd = {
-  ctx: null, introGain: null, mainGain: null, introFilter: null, mainFilter: null,
-  verbSend: null, verb: null, noise: null,
-  unlocked: false, mode: 'off', resumePos: CLIMAX, mainEnded: false, heardMain: false,
-  pauseT: 0, thudWhen: 0, introBackWhen: 0, whooshBuf: null, thudBuf: null,
-  sfx: { whooshAt: 0, impactAt: 0, riserAt: 0 },
+  ctx: null, gain: null, noise: null,
+  unlocked: false, pauseT: 0, thudWhen: 0, whooshBuf: null, thudBuf: null,
+  sfx: { whooshAt: 0, impactAt: 0 },
 };
 let snapArmed = false, punch = 0, ignoreGesturesUntil = 0;
 state.soundOn = localStorage.getItem(SOUND_KEY) !== '0';
-state.music = mainEl; // 測試相容
-state.intro = introEl;
+state.music = music;
 state.sound = snd;
 state.punch = 0;
-
-function nyquist() { return Math.min(20000, (snd.ctx?.sampleRate || 44100) * 0.49); }
 
 function ensureAudio() {
   if (snd.ctx) return;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   const ctx = snd.ctx = new AC();
-  const lp = () => { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 0.7; f.frequency.value = nyquist(); return f; };
-  snd.introFilter = lp(); snd.mainFilter = lp();
-  snd.introGain = ctx.createGain(); snd.introGain.gain.value = 0;
-  snd.mainGain = ctx.createGain(); snd.mainGain.gain.value = 0;
-  ctx.createMediaElementSource(introEl).connect(snd.introFilter);
-  ctx.createMediaElementSource(mainEl).connect(snd.mainFilter);
-  snd.introFilter.connect(snd.introGain).connect(ctx.destination);
-  snd.mainFilter.connect(snd.mainGain).connect(ctx.destination);
-  // 前奏淡出時留下一點殘響
-  const impulse = ctx.createBuffer(2, Math.floor(ctx.sampleRate * 1.8), ctx.sampleRate);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = impulse.getChannelData(ch);
-    for (let i = 0; i < d.length; i++) {
-      const x = i / ctx.sampleRate;
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-x * 3.4) * (1 - i / d.length);
-    }
-  }
-  snd.verb = ctx.createConvolver(); snd.verb.buffer = impulse;
-  snd.verbSend = ctx.createGain(); snd.verbSend.gain.value = 0;
-  snd.introFilter.connect(snd.verbSend).connect(snd.verb).connect(ctx.destination);
+  snd.gain = ctx.createGain();
+  snd.gain.gain.value = 0;
+  ctx.createMediaElementSource(music).connect(snd.gain).connect(ctx.destination);
   bakeSfxSync();
+}
+
+function currentGain(node) {
+  if (!node) return 0;
+  try { const v = node.gain.value; return Number.isFinite(v) ? v : 0; } catch { return 0; }
+}
+
+function fadeNode(node, to, dur) {
+  if (!node || !snd.ctx) return;
+  const now = snd.ctx.currentTime, from = currentGain(node);
+  node.gain.cancelScheduledValues(now);
+  node.gain.setValueAtTime(from, now);
+  node.gain.linearRampToValueAtTime(to, now + Math.max(0.02, dur));
+}
+
+// 等功率曲線，開合音量升降比較順
+function fadeEqPower(node, to, dur) {
+  if (!node || !snd.ctx) return fadeNode(node, to, dur);
+  const now = snd.ctx.currentTime, from = currentGain(node), n = 48;
+  const arr = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const k = i / (n - 1);
+    arr[i] = (to >= from)
+      ? from + (to - from) * Math.sin(k * Math.PI / 2)
+      : to + (from - to) * Math.cos(k * Math.PI / 2);
+  }
+  node.gain.cancelScheduledValues(now);
+  node.gain.setValueAtTime(arr[0], now);
+  try { node.gain.setValueCurveAtTime(arr, now, Math.max(0.05, dur)); }
+  catch { node.gain.linearRampToValueAtTime(to, now + dur); }
 }
 
 function audioLatency() {
@@ -252,12 +249,12 @@ function bakeSfxSync() {
     fn(buf.getChannelData(0), sr);
     return buf;
   };
-  snd.whooshBuf = mk(0.52, (d, sr) => {
+  snd.whooshBuf = mk(0.45, (d, sr) => {
     let y = 0;
     for (let i = 0; i < d.length; i++) {
-      const t = i / sr, k = t / 0.52;
-      const env = Math.min(1, t / 0.05) * Math.exp(-k * 3.4) * 0.65;
-      const cut = 2000 * Math.pow(220 / 2000, k);
+      const t = i / sr, k = t / 0.45;
+      const env = Math.min(1, t / 0.05) * Math.exp(-k * 3.8) * 0.55;
+      const cut = 1800 * Math.pow(260 / 1800, k);
       const a = Math.exp(-2 * Math.PI * cut / sr);
       const x = Math.random() * 2 - 1;
       y = x * (1 - a) + y * a;
@@ -287,164 +284,35 @@ function playBufAt(buf, when, gain) {
   src.start(Math.max(snd.ctx.currentTime, when));
 }
 
-function currentGain(node) {
-  if (!node) return 0;
-  try { const v = node.gain.value; return Number.isFinite(v) ? v : 0; } catch { return 0; }
+function scheduleMotionSfx(isExplode) {
+  if (!state.soundOn || !snd.unlocked || !snd.ctx) return;
+  if (!snd.thudBuf) bakeSfxSync();
+  const ctx = snd.ctx, t0 = ctx.currentTime, lat = audioLatency();
+  const heardAt = isExplode ? THUD_OPEN : THUD_CLOSE;
+  playBufAt(snd.whooshBuf, t0, WHOOSH_GAIN);
+  snd.sfx.whooshAt = performance.now();
+  snd.sfx.impactAt = 0;
+  playBufAt(snd.thudBuf, Math.max(t0, t0 + heardAt - lat), 1);
+  snd.thudWhen = t0 + heardAt;
 }
 
-function fadeNode(node, to, dur) {
-  if (!node || !snd.ctx) return;
-  const now = snd.ctx.currentTime, g = node.gain, from = currentGain(node);
-  g.cancelScheduledValues(now);
-  g.setValueAtTime(from, now);
-  g.linearRampToValueAtTime(to, now + Math.max(0.02, dur));
-}
-
-// 等功率淡化：淡出用 cos、淡入用 sin，交叉時能量較平滑
-function fadeEqPower(node, to, dur) {
-  if (!node || !snd.ctx) return fadeNode(node, to, dur);
-  const now = snd.ctx.currentTime, from = currentGain(node), n = 48;
-  const arr = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const k = i / (n - 1);
-    arr[i] = (to >= from)
-      ? from + (to - from) * Math.sin(k * Math.PI / 2)
-      : to + (from - to) * Math.cos(k * Math.PI / 2);
-  }
-  node.gain.cancelScheduledValues(now);
-  node.gain.setValueAtTime(arr[0], now);
-  try { node.gain.setValueCurveAtTime(arr, now, Math.max(0.05, dur)); }
-  catch { node.gain.linearRampToValueAtTime(to, now + dur); }
-}
-
-function sweepLowpass(filter, fromHz, toHz, dur, now) {
-  if (!filter || !snd.ctx) return;
-  const lo = 80, hi = nyquist();
-  const a = Math.max(lo, Math.min(hi, fromHz)), b = Math.max(lo, Math.min(hi, toHz));
-  filter.frequency.cancelScheduledValues(now);
-  filter.frequency.setValueAtTime(a, now);
-  filter.frequency.exponentialRampToValueAtTime(b, now + Math.max(0.05, dur));
-}
-
-function noiseBuffer() {
-  if (snd.noise) return snd.noise;
-  if (!snd.ctx) return null;
-  const sr = snd.ctx.sampleRate, n = Math.floor(sr * 1.6);
-  const buf = snd.ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
-  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-  snd.noise = buf; return buf;
-}
-
-function playClimaxRiser(when, dur) {
-  if (!snd.ctx) return;
-  const ctx = snd.ctx, buf = noiseBuffer(); if (!buf) return;
-  const src = ctx.createBufferSource(); src.buffer = buf;
-  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.1;
-  bp.frequency.setValueAtTime(350, when);
-  bp.frequency.exponentialRampToValueAtTime(5500, when + dur);
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(0.14, when + dur * 0.75);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-  src.connect(bp).connect(g).connect(ctx.destination);
-  src.start(when); src.stop(when + dur + 0.02);
-  snd.sfx.riserAt = performance.now() + Math.max(0, (when - ctx.currentTime) * 1000);
-}
-
-async function silentPrime(el) {
-  el.muted = true;
-  try { await el.play(); } catch {}
-  el.pause();
-  el.muted = false;
-  try { el.currentTime = 0; } catch {}
-}
-
-function tickIntroLoop() {
-  if (snd.mode !== 'intro' || introEl.paused) return;
-  if (introEl.currentTime >= INTRO_END - 0.05) {
-    try { introEl.currentTime = INTRO_START; } catch {}
-  }
-}
-
-function startIntroLoop() {
+function swellMusic(open) {
   if (!state.soundOn || !snd.unlocked) return;
-  clearTimeout(snd.pauseT);
   if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
-  try { if (introEl.currentTime < INTRO_START || introEl.currentTime >= INTRO_END - 0.08) introEl.currentTime = INTRO_START; } catch {}
-  introEl.play().catch(() => {});
-  const now = snd.ctx ? snd.ctx.currentTime : 0;
-  const fadeIn = (snd.mode === 'main') ? INTRO_IN : 0.6; // 收合後慢進；解鎖時稍快
-  sweepLowpass(snd.introFilter, 700, nyquist(), fadeIn, now);
-  fadeEqPower(snd.introGain, INTRO_GAIN, fadeIn);
-  fadeEqPower(snd.mainGain, 0, 0.4);
-  if (snd.verbSend) fadeNode(snd.verbSend, 0, 0.3);
-  snd.mode = 'intro';
-  snd.pauseT = setTimeout(() => { if (snd.mode === 'intro') mainEl.pause(); }, 450);
-}
-
-function startMainBloom(pos, intoClimax) {
-  if (!state.soundOn || !snd.unlocked) return;
-  clearTimeout(snd.pauseT);
-  if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
-  const dur = mainEl.duration;
-  if (!Number.isFinite(pos) || pos < 0) pos = intoClimax ? CLIMAX_CUE : CLIMAX;
-  if (Number.isFinite(dur) && dur > 0 && pos > dur - 0.8) pos = intoClimax ? CLIMAX_CUE : CLIMAX;
-  try { mainEl.currentTime = pos; } catch {}
-  mainEl.play().catch(() => {});
-  const now = snd.ctx ? snd.ctx.currentTime : 0;
-  const fade = XFADE;
-  const hi = nyquist();
-  sweepLowpass(snd.introFilter, Math.max(snd.introFilter && snd.introFilter.frequency.value || hi, 2000), 480, fade, now);
-  sweepLowpass(snd.mainFilter, 800, hi, fade, now);
-  fadeEqPower(snd.introGain, 0, fade);
-  fadeEqPower(snd.mainGain, MAIN_GAIN, fade);
-  if (snd.verbSend) {
-    snd.verbSend.gain.cancelScheduledValues(now);
-    snd.verbSend.gain.setValueAtTime(Math.max(0.04, currentGain(snd.verbSend)), now);
-    snd.verbSend.gain.linearRampToValueAtTime(0.22, now + 0.25);
-    snd.verbSend.gain.exponentialRampToValueAtTime(0.0001, now + fade + 1.05);
-  }
-  if (intoClimax) playClimaxRiser(now + Math.max(0.05, fade - 1.05), 1.05);
-  snd.mode = 'main';
-  snd.mainEnded = false;
-  snd.heardMain = true;
-  snd.pauseT = setTimeout(() => { if (snd.mode === 'main') introEl.pause(); }, fade * 1000 + 80);
+  if (music.paused) music.play().catch(() => {});
+  fadeEqPower(snd.gain, open ? FULL_GAIN : QUIET_GAIN, SWELL);
 }
 
 function onExplodeAudio() {
   snapArmed = false;
-  if (!state.soundOn || !snd.unlocked) return;
-  const intoClimax = !snd.heardMain || snd.mainEnded || !Number.isFinite(snd.resumePos) || Math.abs(snd.resumePos - CLIMAX) < 0.2;
-  const pos = intoClimax ? CLIMAX_CUE : snd.resumePos;
-  startMainBloom(pos, intoClimax);
+  swellMusic(true);
+  scheduleMotionSfx(true);
 }
 
 function onCollapseAudio() {
   snapArmed = state.explode > SNAP_AT;
-  snd.resumePos = (!mainEl.paused || snd.mode === 'main') ? mainEl.currentTime : snd.resumePos;
-  if (snd.mode === 'main') snd.resumePos = mainEl.currentTime;
-  fadeNode(snd.mainGain, 0, MUSIC_FADE_OUT);
-  fadeNode(snd.introGain, 0, 0.25);
-  clearTimeout(snd.pauseT);
-  snd.pauseT = setTimeout(() => { mainEl.pause(); if (state.target) return; }, MUSIC_FADE_OUT * 1000 + 30);
-  snd.thudWhen = 0; snd.introBackWhen = 0;
-  if (state.soundOn && snd.unlocked && snd.ctx) {
-    if (!snd.thudBuf) bakeSfxSync();
-    const ctx = snd.ctx, t0 = ctx.currentTime, lat = audioLatency();
-    const heardAt = snapArmed ? THUD_AT : 0.02; // 合上撞擊對準音樂切掉；幾乎已合上就立刻撞
-    if (snapArmed) {
-      playBufAt(snd.whooshBuf, t0, 1); // 立刻 whoosh
-      snd.sfx.whooshAt = performance.now();
-    } else {
-      snd.sfx.whooshAt = performance.now();
-    }
-    const thudStart = Math.max(t0, t0 + heardAt - lat);
-    playBufAt(snd.thudBuf, thudStart, 1);
-    snd.thudWhen = t0 + heardAt; // 視覺撞擊跟「聽到」的那一刻對齊（已扣 outputLatency）
-    snd.introBackWhen = snd.thudWhen + 0.35;
-  } else {
-    snd.mode = 'off';
-  }
+  swellMusic(false);
+  scheduleMotionSfx(false);
 }
 
 function applyPunch(now) {
@@ -467,19 +335,29 @@ function updateSoundBtn() {
   }
 }
 
+function startMusicQuietOrFull() {
+  if (snd.ctx && snd.ctx.state !== 'running') snd.ctx.resume();
+  music.loop = true;
+  const to = state.target ? FULL_GAIN : QUIET_GAIN;
+  fadeEqPower(snd.gain, to, 0.35);
+  music.play().catch(() => {});
+}
+
 async function unlockAudio() {
   try {
     ensureAudio();
     if (snd.ctx && snd.ctx.state !== 'running') await snd.ctx.resume();
-    fadeNode(snd.introGain, 0, 0.01);
-    fadeNode(snd.mainGain, 0, 0.01);
-    await Promise.all([silentPrime(introEl), silentPrime(mainEl)]);
+    if (snd.gain) { snd.gain.gain.cancelScheduledValues(snd.ctx.currentTime); snd.gain.gain.value = 0; }
+    music.loop = true;
+    music.muted = true;
+    try { await music.play(); } catch {}
+    music.muted = false;
+    if (music.paused && state.soundOn) { try { await music.play(); } catch {} }
     snd.unlocked = true;
     state.audioUnlocked = true;
     updateSoundBtn();
-    // 解鎖後若尚未展開：只輕聲循環前奏，絕不跳到高潮
-    if (state.soundOn && !state.target) startIntroLoop();
-    else if (state.soundOn && state.target) onExplodeAudio();
+    if (state.soundOn) startMusicQuietOrFull();
+    else { music.pause(); fadeEqPower(snd.gain, 0, 0.01); }
   } catch (e) {
     console.warn('音效尚未解鎖', e);
   }
@@ -497,17 +375,14 @@ function toggleSound(ev) {
   state.soundOn = !state.soundOn;
   localStorage.setItem(SOUND_KEY, state.soundOn ? '1' : '0');
   updateSoundBtn();
-  if (state.soundOn) {
-    if (state.target) onExplodeAudio(); else startIntroLoop();
-  } else {
-    fadeNode(snd.introGain, 0, 0.2);
-    fadeNode(snd.mainGain, 0, 0.2);
+  if (state.soundOn) startMusicQuietOrFull();
+  else {
+    fadeEqPower(snd.gain, 0, 0.2);
     clearTimeout(snd.pauseT);
-    snd.pauseT = setTimeout(() => { introEl.pause(); mainEl.pause(); snd.mode = 'off'; }, 250);
+    snd.pauseT = setTimeout(() => { if (!state.soundOn) music.pause(); }, 250);
   }
 }
 
-mainEl.addEventListener('ended', () => { snd.mainEnded = true; snd.resumePos = CLIMAX; });
 updateSoundBtn();
 document.addEventListener('pointerdown', (e) => {
   if (e.target?.closest?.('#btnSound, #btnARSound')) return;
