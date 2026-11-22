@@ -141,7 +141,19 @@
   #trackScan { position: absolute; inset: 0; z-index: 3; display: none; pointer-events: none;
     align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
   body.mode-track.searching #trackScan { display: flex; }
-  #trackStatus { position: absolute; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 52px);
+  body.mode-track.track-sim #trackScan { display: none !important; }
+  body.mode-track.track-sim #trackLabel, body.mode-track.found #trackLabel { opacity: 1; transform: none; }
+  #trackActions { position: absolute; left: 8px; right: 8px; top: calc(env(safe-area-inset-top) + 50px);
+    z-index: 8; display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap;
+    pointer-events: auto; }
+  #trackActions a, #trackActions button { appearance: none; display: inline-flex; align-items: center; justify-content: center;
+    height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--glass); color: #fff; font: inherit; font-size: 13px; font-weight: 700;
+    text-decoration: none; cursor: pointer; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    white-space: nowrap; }
+  #trackActions button.primary, #trackSimBtn.primary { background: linear-gradient(180deg, #3aa0ff, #1f6fd1); border-color: transparent; }
+  body.mode-track.track-sim #trackSimBtn { background: rgba(255,176,32,.2); border-color: rgba(255,176,32,.45); }
+  #trackStatus { position: absolute; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 92px);
     z-index: 7; margin: 0; text-align: center; font-size: 13px; line-height: 1.45; color: #e8f0fa;
     text-shadow: 0 1px 8px #000; pointer-events: none; min-height: 1.3em; }
   #trackStatus.err { color: #ffd2a6; }
@@ -160,6 +172,11 @@
   #trackScan span { font-size: 12px; color: #c9d4e4; text-shadow: 0 1px 8px #000; }
   #trackHud { position: absolute; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 16px);
     z-index: 4; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #trackNav, #trackPips, #trackLabel { pointer-events: auto; }
+  #trackNav { display: none; gap: 8px; }
+  body.mode-track.track-sim #trackNav, body.mode-track.found #trackNav { display: flex; }
+  #trackNav button { appearance: none; width: 44px; height: 36px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--glass); color: #fff; font: inherit; font-size: 18px; font-weight: 700; cursor: pointer; }
   #trackLabel { max-width: 420px; width: 100%; padding: 12px 16px 14px; border-radius: 16px;
     background: var(--glass); border: 1px solid var(--line);
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); text-align: center;
@@ -169,8 +186,10 @@
   #trackLabel .spec { margin-top: 2px; font-size: 12.5px; color: #c5d2e4; }
   #trackLabel .hint { margin-top: 6px; font-size: 11px; color: #8fa0b6; }
   #trackPips { display: flex; gap: 6px; justify-content: center; }
-  #trackPips .pip { width: 7px; height: 7px; border-radius: 99px; background: rgba(255,255,255,.28); transition: .2s; }
-  #trackPips .pip.on { background: #e8ba4a; transform: scale(1.35); }
+  #trackPips .pip { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 99px; background: transparent; cursor: pointer;
+    position: relative; }
+  #trackPips .pip::after { content: ""; position: absolute; inset: 7px; border-radius: 99px; background: rgba(255,255,255,.4); transition: .2s; }
+  #trackPips .pip.on::after { background: #e8ba4a; inset: 5px; }
   #trackIntro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px;
     background: rgba(6,9,14,.72); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
   #trackIntro.hide { display: none; }
@@ -184,6 +203,7 @@
   #trackStart { display: block; width: 100%; height: 50px; border-radius: 16px; border: 0;
     background: linear-gradient(180deg, #3aa0ff, #1f6fd1); color: #fff; font-size: 16px; font-weight: 600; font-family: inherit; cursor: pointer; }
   #trackStart:disabled { opacity: .5; cursor: default; }
+  #trackSimIntro { display: block; width: 100%; height: 48px; margin-top: 8px; border-radius: 16px; border: 1px solid var(--line); background: rgba(255,255,255,.08); color: #fff; font-size: 15px; font-weight: 700; font-family: inherit; cursor: pointer; }
   #trackIntro a.ghost { display: block; margin-top: 8px; height: 44px; line-height: 44px; text-decoration: none; color: #eef3fa; font-weight: 600; }
 
   /* assembly UI */
@@ -343,15 +363,23 @@
 
 <div id="trackPanel">
   <div id="trackAr" aria-hidden="true"></div>
+  <div id="trackActions">
+    <a id="trackCardLink" href="track/card.html" target="_blank" rel="noopener">列印卡片／開啟卡片</a>
+    <button type="button" id="trackSimBtn" class="primary">模擬卡片</button>
+  </div>
   <p id="trackStatus" role="status"></p>
   <button type="button" id="trackRetry">開啟相機</button>
   <div id="trackScan">
     <div class="track-frame"></div>
     <b>請將後鏡頭對準卡片</b>
-    <span>可列印或在另一台裝置打開卡片頁</span>
+    <span>沒有第二台裝置時，可按「模擬卡片」直接看模型。<a href="track/card.html" target="_blank" rel="noopener" style="color:#8ec8ff;pointer-events:auto">列印卡片／開啟卡片</a></span>
   </div>
   <div id="trackHud">
-    <div id="trackPips" aria-hidden="true"></div>
+    <div id="trackNav">
+      <button type="button" id="trackPrev" aria-label="上一項">‹</button>
+      <div id="trackPips" aria-hidden="true"></div>
+      <button type="button" id="trackNext" aria-label="下一項">›</button>
+    </div>
     <div id="trackLabel">
       <div class="name">整機</div>
       <div class="spec">2U 機架式伺服器（示例）</div>
@@ -365,7 +393,8 @@
       <div id="trackBarWrap"><div id="trackBar"></div></div>
       <div id="trackLoadTxt">準備資源…</div>
       <button class="btn primary" id="trackStart" type="button" disabled>開啟相機</button>
-      <a class="ghost" href="track/card.html" target="_blank" rel="noopener">先看／列印卡片</a>
+      <button class="btn" id="trackSimIntro" type="button">模擬卡片（無實體卡也可用）</button>
+      <a class="ghost" href="track/card.html" target="_blank" rel="noopener">列印卡片／開啟卡片</a>
     </div>
   </div>
 </div>

@@ -246,12 +246,23 @@ try {
       selected: document.querySelector('#modeTabs [aria-selected="true"]')?.dataset.appMode,
       btn: document.querySelector('#trackStart')?.textContent,
       disabled: document.querySelector('#trackStart')?.disabled,
-      print: !!document.querySelector('a[href="track/card.html"]'),
+      printHref: document.querySelector('#trackCardLink')?.href || '',
+      printText: document.querySelector('#trackCardLink')?.textContent || '',
+      printVisible: (() => {
+        const el = document.querySelector('#trackCardLink');
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+      })(),
+      simBtn: document.querySelector('#trackSimBtn')?.textContent || '',
+      simIntro: document.querySelector('#trackSimIntro')?.textContent || '',
       intro: !document.querySelector('#trackIntro').classList.contains('hide'),
       loopStopped: true,
     }));
     ok('?mode=track shows 開啟相機', info.selected === 'track' && info.btn.includes('開啟相機') && info.disabled === false, info);
-    ok('列印卡片 link present', info.print, info);
+    ok('列印卡片／開啟卡片 link visible in tab UI', info.printVisible && /track\/card\.html/.test(info.printHref) && info.printText.includes('列印卡片'), info);
+    ok('模擬卡片 button present', info.simBtn.includes('模擬卡片') && info.simIntro.includes('模擬卡片'), info);
     ok('track waits for Start (intro visible)', info.intro, info);
 
     // Start with fake camera should not throw
@@ -295,10 +306,51 @@ try {
       ok('failed start keeps 開啟相機 visible', shown.introShown && /開啟相機/.test(shown.btn || ''), shown);
     }
 
+    // 模擬卡片：一支手機也能直接看模型
+    await p.click('#trackSimBtn');
+    await p.waitForFunction(() => window.__demo?.trackSim === true, { timeout: 30000 }).catch(() => {});
+    await sleep(400);
+    const sim = await p.evaluate(() => ({
+      on: !!__demo.trackSim,
+      kind: __demo.trackSimKind,
+      cls: document.body.classList.contains('track-sim'),
+      btn: document.querySelector('#trackSimBtn')?.textContent || '',
+      name: document.querySelector('#trackLabel .name')?.textContent || '',
+      pips: document.querySelectorAll('#trackPips .pip').length,
+      nav: !!document.querySelector('#trackPrev') && !!document.querySelector('#trackNext'),
+      introHidden: document.querySelector('#trackIntro')?.classList.contains('hide'),
+      canvas: !!document.querySelector('#trackSimCanvas, #trackAr canvas'),
+      hold: !!(() => {
+        const root = __demo; // session not on state; check kind only
+        return __demo.trackSimKind;
+      })(),
+    }));
+    ok('模擬卡片 shows model and 結束模擬', sim.on && sim.cls && sim.btn.includes('結束模擬') && sim.introHidden && (sim.kind === 'ar' || sim.kind === 'fallback'), sim);
+    ok('模擬卡片 has 8 switchable pips + prev/next', sim.pips === 8 && sim.nav && sim.name === '整機', sim);
+    await p.click('#trackNext');
+    await sleep(300);
+    const stepped = await p.evaluate(() => ({
+      index: __demo.trackItemIndex,
+      name: document.querySelector('#trackLabel .name')?.textContent || '',
+    }));
+    ok('next / pips switch item in simulate mode', stepped.index === 1 && stepped.name && stepped.name !== '整機', stepped);
+    await p.evaluate(() => document.querySelectorAll('#trackPips .pip')[3]?.click());
+    await sleep(200);
+    const piped = await p.evaluate(() => ({ index: __demo.trackItemIndex, name: document.querySelector('#trackLabel .name')?.textContent || '' }));
+    ok('pip 3 selects 4th item', piped.index === 3 && !!piped.name, piped);
+    await p.click('#trackSimBtn');
+    await p.waitForFunction(() => window.__demo?.trackSim !== true, { timeout: 8000 }).catch(() => {});
+    const ended = await p.evaluate(() => ({
+      on: !!__demo.trackSim,
+      cls: document.body.classList.contains('track-sim'),
+      btn: document.querySelector('#trackSimBtn')?.textContent || '',
+    }));
+    ok('結束模擬 returns to real tracking UI', !ended.on && !ended.cls && ended.btn.includes('模擬卡片'), ended);
+
     await p.evaluate(() => window.__demo.setAppMode('demo'));
     await p.waitForFunction(() => window.__demo.appMode === 'demo');
-    const left = await p.evaluate(() => ({ mode: __demo.appMode, trackOn: !!__demo.trackOn }));
-    ok('leaving track stops session', left.mode === 'demo' && left.trackOn === false, left);
+    const left = await p.evaluate(() => ({ mode: __demo.appMode, trackOn: !!__demo.trackOn, sim: !!__demo.trackSim }));
+    ok('leaving track stops session', left.mode === 'demo' && left.trackOn === false && left.sim === false, left);
   });
 
   const card = await fetch(base + 'track/card.html').then((r) => ({ status: r.status, len: +r.headers.get('content-length') || 0 }));

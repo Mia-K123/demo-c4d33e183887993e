@@ -1646,7 +1646,7 @@ function updateModeTabs() {
   document.querySelectorAll('.legend-asm').forEach((el) => { el.hidden = state.appMode !== 'assembly'; });
 }
 
-let trackMod = null, trackAssets = null, trackSession = null, trackBusy = false, trackPreloadP = null;
+let trackMod = null, trackAssets = null, trackSession = null, trackBusy = false, trackPreloadP = null, trackSim = null, simPtrUnbind = null;
 const TRACK_CACHE = 'gesture-demo-track-v1';
 const TRACK_FILES = [
   { url: () => rel('track/track-mode.bundle.js'), bytes: 2810444, w: 0.62 },
@@ -1729,16 +1729,328 @@ function resetTrackHud() {
 
 function syncTrackPips(index) {
   const wrap = $('#trackPips'); if (!wrap) return;
-  const n = (trackMod?.ITEMS || []).length || 8;
+  const items = trackMod?.ITEMS || [];
+  const n = items.length || 8;
   if (wrap.childElementCount !== n) {
     wrap.innerHTML = '';
     for (let i = 0; i < n; i++) {
-      const d = document.createElement('div'); d.className = 'pip' + (i === index ? ' on' : '');
+      const d = document.createElement('button');
+      d.type = 'button';
+      d.className = 'pip' + (i === index ? ' on' : '');
+      d.setAttribute('aria-label', items[i]?.zh || ('項目 ' + (i + 1)));
+      d.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setTrackItem(i); });
       wrap.appendChild(d);
     }
   } else {
     [...wrap.children].forEach((el, i) => el.classList.toggle('on', i === index));
   }
+}
+
+function trackItemList() { return trackMod?.ITEMS || []; }
+
+function setTrackItem(index) {
+  const items = trackItemList();
+  const n = items.length || 8;
+  const i = ((index % n) + n) % n;
+  state.trackItemIndex = i;
+  if (trackSession?.setIndex) trackSession.setIndex(i);
+  else {
+    const item = items[i];
+    if (item) {
+      const name = $('#trackLabel .name'); if (name) name.textContent = item.zh;
+      const spec = $('#trackLabel .spec'); if (spec) spec.textContent = item.spec || '';
+      state.trackItem = item.zh;
+    }
+    syncTrackPips(i);
+  }
+  if (trackSim?.kind === 'fallback') applyFallbackItem(i);
+}
+
+function unbindSimPointer() { try { simPtrUnbind?.(); } catch {} simPtrUnbind = null; }
+
+function bindSimPointer(el, target) {
+  unbindSimPointer();
+  if (!el || !target) return;
+  const pts = new Map();
+  let mode = 'none', lastX = 0, lastY = 0, lastDist = 0, downX = 0, downY = 0, downT = 0, rotated = false, swallowClick = false;
+  const onDown = (e) => {
+    if (e.button && e.button !== 0) return;
+    try { el.setPointerCapture(e.pointerId); } catch {}
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size >= 2) {
+      mode = 'pinch';
+      const arr = [...pts.values()];
+      lastDist = Math.hypot(arr[0].x - arr[1].x, arr[0].y - arr[1].y);
+    } else {
+      mode = 'pending';
+      lastX = downX = e.clientX; lastY = downY = e.clientY; downT = performance.now();
+      rotated = false;
+    }
+  };
+  const onMove = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size >= 2) {
+      const arr = [...pts.values()];
+      const d = Math.hypot(arr[0].x - arr[1].x, arr[0].y - arr[1].y);
+      if (lastDist > 0 && d > 0) {
+        const s = Math.min(2.6, Math.max(0.45, target.scale.x * (d / lastDist)));
+        target.scale.setScalar(s);
+      }
+      lastDist = d;
+      mode = 'pinch';
+      rotated = true;
+      return;
+    }
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    if (mode === 'pending') {
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) < 10) return;
+      mode = 'rotate';
+    }
+    if (mode === 'rotate') {
+      target.rotation.y += dx * 0.008;
+      target.rotation.x = Math.max(-1.15, Math.min(1.15, target.rotation.x + dy * 0.006));
+      rotated = true;
+    }
+  };
+  const onUp = (e) => {
+    pts.delete(e.pointerId);
+    try { el.releasePointerCapture(e.pointerId); } catch {}
+    if (pts.size < 2) lastDist = 0;
+    if (pts.size === 0) {
+      if (!rotated && mode !== 'pinch') {
+        const dx = e.clientX - downX, dy = e.clientY - downY, dt = performance.now() - downT;
+        if (dt < 420 && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+          swallowClick = true;
+          setTrackItem((state.trackItemIndex || 0) + (dx < 0 ? 1 : -1));
+        }
+      }
+      mode = 'none';
+    }
+  };
+  const onClick = (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  el.addEventListener('pointerdown', onDown);
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerup', onUp);
+  el.addEventListener('pointercancel', onUp);
+  el.addEventListener('click', onClick, true);
+  el.style.touchAction = 'none';
+  simPtrUnbind = () => {
+    el.removeEventListener('pointerdown', onDown);
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerup', onUp);
+    el.removeEventListener('pointercancel', onUp);
+    el.removeEventListener('click', onClick, true);
+    simPtrUnbind = null;
+  };
+}
+
+function detachArSim() {
+  if (!trackSim || trackSim.kind !== 'ar') return;
+  const { hold, root, homeParent, camera, scene } = trackSim;
+  try {
+    if (root && hold && root.parent === hold) hold.remove(root);
+    if (root && homeParent && root.parent !== homeParent) homeParent.add(root);
+  } catch (e) { console.warn(e); }
+  try { if (hold?.parent) hold.parent.remove(hold); } catch {}
+  try { camera?.remove?.(hold); } catch {}
+  try { scene?.remove?.(hold); } catch {}
+}
+
+function disposeFallbackSim() {
+  if (!trackSim || trackSim.kind !== 'fallback') return;
+  try { if (trackSim.raf) cancelAnimationFrame(trackSim.raf); } catch {}
+  try { trackSim.ro?.disconnect(); } catch {}
+  try { trackSim.renderer?.dispose(); } catch {}
+  try { trackSim.canvas?.remove(); } catch {}
+}
+
+function startArSimulate() {
+  const intern = trackSession?._internal;
+  if (!intern?.root || !intern?.scene || !intern?.camera) throw new Error('追蹤場景尚未就緒');
+  const { scene, root, anchor, camera } = intern;
+  const Group = root.constructor;
+  const hold = new Group();
+  hold.name = '__simHold';
+  const homeParent = root.parent || anchor?.group;
+  if (root.parent) root.parent.remove(root);
+  hold.add(root);
+  camera.add(hold);
+  hold.position.set(0, 0, -0.62);
+  hold.rotation.set(0.12, Math.PI, 0);
+  hold.scale.setScalar(1.05);
+  trackSim = { kind: 'ar', hold, root, homeParent, scene, camera };
+  state.trackSimKind = 'ar';
+  bindSimPointer($('#trackAr'), hold);
+}
+
+function applyFallbackItem(index) {
+  if (!trackSim?.model) return;
+  const items = trackItemList();
+  const item = items[index] || { id: 'all', groups: null, hue: '#3aa0ff' };
+  const all = item.id === 'all' || !item.groups;
+  const selected = new Set(item.groups || []);
+  const nameToGroup = {};
+  for (const [name, info] of Object.entries(trackAssets?.parts?.objects || {})) nameToGroup[name] = info.group;
+  const groupOf = (o) => { let n = o; while (n) { if (nameToGroup[n.name]) return nameToGroup[n.name]; n = n.parent; } return null; };
+  trackSim.model.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = groupOf(o);
+    const on = all || (g && selected.has(g));
+    const ghost = !all && !on;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      if (m.userData._fbInit == null) {
+        m.userData._fbInit = true;
+        m.userData._trans = !!m.transparent;
+        m.userData._emi = m.emissiveIntensity || 0;
+        if (m.emissive) m.userData._em = m.emissive.clone();
+        m.transparent = true;
+      }
+      m.opacity = ghost ? 0.16 : 1;
+      m.depthWrite = !ghost;
+      if (m.emissive) {
+        if (!ghost && !all && on) { m.emissive.set(item.hue); m.emissiveIntensity = 0.4; }
+        else if (m.userData._em) { m.emissive.copy(m.userData._em); m.emissiveIntensity = m.userData._emi || 0; }
+      }
+    }
+  });
+}
+
+async function startFallbackSimulate() {
+  const box = $('#trackAr');
+  if (!box) throw new Error('找不到追蹤畫面容器');
+  if (!trackAssets?.glbBuf) throw new Error('模型尚未預載');
+  const cnv = document.createElement('canvas');
+  cnv.id = 'trackSimCanvas';
+  cnv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1;touch-action:none;background:transparent';
+  box.appendChild(cnv);
+  const r = new THREE.WebGLRenderer({ canvas: cnv, antialias: true, alpha: true });
+  r.setClearColor(0x070b12, 1);
+  r.setPixelRatio(Math.min(devicePixelRatio, 2));
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  const sc = new THREE.Scene();
+  const cam = new THREE.PerspectiveCamera(32, 1, 0.01, 100);
+  cam.position.set(0, 0.12, 1.4);
+  cam.lookAt(0, 0, 0);
+  sc.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const d1 = new THREE.DirectionalLight(0xffffff, 1.35); d1.position.set(2, 3, 4); sc.add(d1);
+  const d2 = new THREE.DirectionalLight(0x9fc4ff, 0.8); d2.position.set(-3, 1, -2); sc.add(d2);
+  const hold = new THREE.Group();
+  sc.add(hold);
+  const gltf = await new Promise((res, rej) => {
+    new GLTFLoader().parse(trackAssets.glbBuf.slice(0), '', res, rej);
+  });
+  const model = gltf.scene;
+  model.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
+  });
+  const bb = new THREE.Box3().setFromObject(model);
+  const size = bb.getSize(new THREE.Vector3());
+  const center = bb.getCenter(new THREE.Vector3());
+  const s = 0.95 / Math.max(size.x, size.y, size.z, 1e-6);
+  model.position.set(-center.x * s, -center.y * s, -center.z * s);
+  model.scale.setScalar(s);
+  hold.add(model);
+  hold.rotation.set(0.35, -0.55, 0);
+  const resize = () => {
+    const w = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
+    r.setSize(w, h, false);
+    cam.aspect = w / h;
+    cam.updateProjectionMatrix();
+  };
+  resize();
+  const ro = new ResizeObserver(resize);
+  ro.observe(box);
+  const sim = { kind: 'fallback', renderer: r, scene: sc, camera: cam, hold, model, canvas: cnv, ro, raf: 0 };
+  const loop = () => { sim.raf = requestAnimationFrame(loop); r.render(sc, cam); };
+  loop();
+  trackSim = sim;
+  state.trackSimKind = 'fallback';
+  bindSimPointer(cnv, hold);
+  applyFallbackItem(state.trackItemIndex || 0);
+}
+
+async function stopCardSimulate({ keepSession = true, skipHud = false } = {}) {
+  unbindSimPointer();
+  if (trackSim?.kind === 'ar') detachArSim();
+  if (trackSim?.kind === 'fallback') disposeFallbackSim();
+  trackSim = null;
+  state.trackSim = false;
+  state.trackSimKind = null;
+  document.body.classList.remove('track-sim');
+  const btn = $('#trackSimBtn');
+  if (btn) { btn.disabled = false; btn.textContent = '模擬卡片'; }
+  if (skipHud) return;
+  const hint = $('#trackLabel .hint');
+  if (keepSession && trackSession && state.trackOn) {
+    document.body.classList.add('searching');
+    document.body.classList.remove('found');
+    if (hint) hint.textContent = '轉動卡片約 45°，或輕觸畫面切換';
+    setTrackStatus('已結束模擬。請將後鏡頭對準卡片，或再按「模擬卡片」。');
+  } else {
+    resetTrackHud();
+    setTrackStatus(trackAssets ? '資源已就緒。可開啟相機，或按「模擬卡片」直接看模型。' : '');
+  }
+}
+
+async function startCardSimulate() {
+  if (state.trackSim) return;
+  if (trackBusy) {
+    const t0 = performance.now();
+    while (trackBusy && performance.now() - t0 < 8000) await new Promise((r) => setTimeout(r, 50));
+  }
+  const btn = $('#trackSimBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '載入中…'; }
+  try {
+    setTrackStatus('正在載入模擬模型…');
+    await loadTrackModule();
+    await preloadTrack();
+    if (!trackAssets) throw new Error('資源尚未就緒');
+    if (!(trackSession && state.trackOn)) {
+      try { await startTrackSession(); } catch {}
+    }
+    if (trackSession && state.trackOn) startArSimulate();
+    else await startFallbackSimulate();
+    state.trackSim = true;
+    document.body.classList.add('track-sim', 'found');
+    document.body.classList.remove('searching', 'track-error');
+    $('#trackIntro')?.classList.add('hide');
+    if (btn) { btn.disabled = false; btn.textContent = '結束模擬'; }
+    const hint = $('#trackLabel .hint');
+    if (hint) hint.textContent = '拖曳旋轉、捏合縮放；點圓點或左右切換零件';
+    setTrackItem(state.trackItemIndex || 0);
+    const bg = trackSim?.kind === 'ar' ? '後鏡頭當背景' : '無相機，深色背景';
+    setTrackStatus('模擬卡片：模型已載入（' + bg + '）。可切換 8 個項目，再按一次即可結束。');
+  } catch (e) {
+    console.warn(e);
+    unbindSimPointer();
+    if (trackSim?.kind === 'ar') detachArSim();
+    if (trackSim?.kind === 'fallback') disposeFallbackSim();
+    trackSim = null;
+    state.trackSim = false;
+    state.trackSimKind = null;
+    document.body.classList.remove('track-sim');
+    const why = '模擬卡片失敗：' + (e?.message || e);
+    setTrackStatus(why, { error: true });
+    toast(why);
+    if (btn) { btn.disabled = false; btn.textContent = '模擬卡片'; }
+  }
+}
+
+function toggleCardSimulate(e) {
+  e?.preventDefault?.();
+  e?.stopPropagation?.();
+  if (state.trackSim) stopCardSimulate({ keepSession: true });
+  else startCardSimulate();
 }
 
 async function loadTrackModule() {
@@ -1955,12 +2267,14 @@ async function startTrackSession() {
           state.trackItem = item.zh;
         },
         onFound: () => {
+          if (state.trackSim) return;
           document.body.classList.add('found');
           document.body.classList.remove('searching');
           state.trackFound = true;
           setTrackStatus('已找到卡片');
         },
         onLost: () => {
+          if (state.trackSim) return;
           document.body.classList.remove('found');
           document.body.classList.add('searching');
           state.trackFound = false;
@@ -2001,11 +2315,14 @@ async function startTrackSession() {
 }
 
 async function stopTrackSession() {
+  if (state.trackSim || trackSim) {
+    await stopCardSimulate({ keepSession: false, skipHud: true });
+  }
   const sess = trackSession;
   trackSession = null;
   state.trackOn = false;
   state.trackFound = false;
-  document.body.classList.remove('searching', 'found');
+  document.body.classList.remove('searching', 'found', 'track-sim');
   try { if (sess) await sess.stop(); }
   catch (e) { try { await trackMod?.stop?.(); } catch (e2) { console.warn(e2); } }
   resetTrackHud();
@@ -2097,6 +2414,13 @@ document.querySelectorAll('#modeTabs [data-app-mode]').forEach((b) => {
 });
 $('#trackStart')?.addEventListener('click', () => startTrackSession());
 $('#trackRetry')?.addEventListener('click', () => startTrackSession());
+$('#trackSimBtn')?.addEventListener('click', toggleCardSimulate);
+$('#trackSimIntro')?.addEventListener('click', toggleCardSimulate);
+$('#trackPrev')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setTrackItem((state.trackItemIndex || 0) - 1); });
+$('#trackNext')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setTrackItem((state.trackItemIndex || 0) + 1); });
+const cardHref = rel('track/card.html');
+document.querySelectorAll('a[href="track/card.html"], #trackCardLink, #btnCard').forEach((a) => { a.href = cardHref; });
+
 
 state.setAppMode = setAppMode;
 state.releaseCameras = releaseCameras;
@@ -2106,6 +2430,9 @@ state.stillIsNonBlack = stillIsNonBlack;
 state.startTrack = startTrackSession;
 state.stopTrack = stopTrackSession;
 state.preloadTrack = preloadTrack;
+state.startCardSimulate = startCardSimulate;
+state.stopCardSimulate = stopCardSimulate;
+state.setTrackItem = setTrackItem;
 state.fpsMeter = fpsMeter;
 
 // 啟動
