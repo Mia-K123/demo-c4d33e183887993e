@@ -17,10 +17,13 @@ let index = readFileSync(resolve(root, 'index.html'), 'utf8');
 const cssSrc = readFileSync(resolve(root, 'styles.css'));
 // provisional ver from sources
 const srcJs = readFileSync(resolve(srcDir, 'app.js'));
-const ver = sha8(srcJs, cssSrc, 'asset-ver-v1');
+const menuJs = readFileSync(resolve(srcDir, 'ar-menu.mjs'));
+let trackBuf = Buffer.alloc(0);
+try { trackBuf = readFileSync(resolve(root, 'track/track-mode.bundle.js')); } catch {}
+const ver = sha8(srcJs, cssSrc, menuJs, trackBuf, 'asset-ver-v2');
 
 execSync(
-  `npx esbuild app.js --bundle --format=esm --minify --define:__ASSET_VER__=${JSON.stringify(ver)} --outfile=${resolve(root, 'app.js')}`,
+  `npx esbuild app.js --bundle --format=esm --minify --define:__ASSET_VER__=${JSON.stringify(JSON.stringify(ver))} --outfile=${resolve(root, 'app.js')}`,
   { cwd: srcDir, stdio: 'inherit' },
 );
 

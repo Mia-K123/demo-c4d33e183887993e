@@ -5,6 +5,7 @@ import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { createGestureMachine, classifyPose } from './gestures.mjs';
 import { createAssembly } from './assembly-mode.js';
+import { createArMenu } from './ar-menu.mjs';
 
 const $ = (s) => document.querySelector(s);
 const ASSET_VER = (typeof __ASSET_VER__ !== 'undefined' && __ASSET_VER__) ? String(__ASSET_VER__) : 'dev';
@@ -41,6 +42,7 @@ const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(2, 4, 3)
 const rim = new THREE.DirectionalLight(0x9fc4ff, 1.2); rim.position.set(-3, 2, -3); scene.add(rim);
 const camera = new THREE.PerspectiveCamera(32, 1, 0.01, 100);
 const pivot = new THREE.Group(); scene.add(pivot);
+let arMenuHost = null, cardTex = null;
 
 // soft contact shadow (cheap radial gradient)
 const sc = document.createElement('canvas'); sc.width = sc.height = 128;
@@ -163,6 +165,19 @@ function frame(now, xrFrame) {
 
   if (renderer.xr.isPresenting) {
     updateAR(xrFrame);
+  } else if (state.trackSim && arMenuHost) {
+    setExplodePositions(0);
+    arMenuHost.tick(dt, camera);
+    const dist = 3.85 / Math.max(0.55, state.zoom);
+    const pit = state.pitch;
+    const yaw = state.yaw;
+    camera.position.set(
+      Math.sin(yaw) * dist * Math.cos(pit),
+      Math.sin(pit) * dist,
+      Math.cos(yaw) * dist * Math.cos(pit),
+    );
+    camera.lookAt(0, 0.12, 0);
+    for (const gr of Object.values(groups)) if (gr.el) gr.el.style.opacity = 0;
   } else {
     pivot.rotation.y = state.yaw;
     const fovV = THREE.MathUtils.degToRad(camera.fov / 2), fovH = Math.atan(Math.tan(fovV) * camera.aspect);
@@ -468,7 +483,17 @@ canvas.addEventListener('pointermove', (e) => {
   ptrs.set(e.pointerId, [e.clientX, e.clientY]);
   if (ptrs.size === 2) { moved = true; const [a, b] = [...ptrs.values()]; state.tZoom = clampZ(zoom0 * Math.hypot(a[0] - b[0], a[1] - b[1]) / pinch0); }
 });
-const up = (e) => { if (ptrs.size === 1 && !moved && !state.trackSim) { const t = performance.now(); if (t - lastTap < 320) setTarget(state.target ? 0 : 1); lastTap = t; } ptrs.delete(e.pointerId); };
+const up = (e) => {
+  if (ptrs.size === 1 && !moved) {
+    if (state.trackSim && arMenuHost) pickArMenu(e);
+    else if (!state.trackSim) {
+      const t = performance.now();
+      if (t - lastTap < 320) setTarget(state.target ? 0 : 1);
+      lastTap = t;
+    }
+  }
+  ptrs.delete(e.pointerId);
+};
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); state.tZoom = clampZ(state.tZoom * Math.exp(-e.deltaY * 0.0012)); }, { passive: false });
 addEventListener('keydown', (e) => {
@@ -1536,6 +1561,161 @@ function stopDetectLoop() {
   detectLoopToken++;
 }
 
+let trackHandOn = false, trackHandToken = 0, trackHandFails = 0, trackHandSlow = 0;
+const hoverHold = { index: -1, t: 0, cool: 0 };
+const swipeHand = { x: null, armed: false };
+
+function trackHandVideoEl() {
+  return $('#trackBgVideo') || $('#trackAr video') || null;
+}
+
+function videoNormToScreen(video, nx, ny, sw, sh) {
+  const vw = video?.videoWidth || sw, vh = video?.videoHeight || sh;
+  const scale = Math.max(sw / Math.max(vw, 1), sh / Math.max(vh, 1));
+  const dw = vw * scale, dh = vh * scale;
+  return { x: (sw - dw) / 2 + nx * dw, y: (sh - dh) / 2 + ny * dh };
+}
+
+function startTrackHandLoop() {
+  stopTrackHandLoop();
+  trackHandOn = true;
+  trackHandFails = 0;
+  trackHandSlow = 0;
+  const token = ++trackHandToken;
+  state.trackHands = 'on';
+  lastVideoTime = -1;
+  const onFrame = (now) => {
+    if (!trackHandOn || token !== trackHandToken) return;
+    detectTrackHand(typeof now === 'number' ? now : performance.now());
+    const el = trackHandVideoEl();
+    if (el && typeof el.requestVideoFrameCallback === 'function') el.requestVideoFrameCallback(onFrame);
+    else requestAnimationFrame(onFrame);
+  };
+  const src = trackHandVideoEl();
+  if (src && typeof src.requestVideoFrameCallback === 'function') src.requestVideoFrameCallback(onFrame);
+  else requestAnimationFrame(onFrame);
+}
+
+function stopTrackHandLoop() {
+  trackHandOn = false;
+  trackHandToken++;
+  hoverHold.index = -1;
+  swipeHand.x = null;
+  if (state.trackHands === 'on') state.trackHands = 'off';
+}
+
+function fallbackTrackHands(why) {
+  stopTrackHandLoop();
+  state.trackHands = 'fallback';
+  state.trackHandsWhy = why || '後鏡頭手勢暫停，改用點選與 ‹ ›';
+  setTrackStatus(state.trackHandsWhy);
+}
+
+function detectTrackHand(now) {
+  if (!trackHandOn) return;
+  const src = trackHandVideoEl();
+  if (!landmarker || !src || src.readyState < 2) return;
+  if (src.currentTime === lastVideoTime) return;
+  lastVideoTime = src.currentTime;
+  const t0 = performance.now();
+  try {
+    const input = detectSource(src);
+    const res = landmarker.detectForVideo(input, now);
+    const inferMs = performance.now() - t0;
+    fpsMeter.detMs = fpsMeter.detMs ? fpsMeter.detMs * 0.8 + inferMs * 0.2 : inferMs;
+    fpsMeter.detN++;
+    if (!fpsMeter.detT) fpsMeter.detT = t0;
+    if (t0 - fpsMeter.detT >= 500) {
+      fpsMeter.detFps = Math.round(fpsMeter.detN * 1000 / (t0 - fpsMeter.detT));
+      fpsMeter.detN = 0;
+      fpsMeter.detT = t0;
+      state.detFps = fpsMeter.detFps;
+      state.detMs = Math.round(fpsMeter.detMs);
+    }
+    trackHandFails = 0;
+    if (inferMs > 90) {
+      trackHandSlow++;
+      if (trackHandSlow > 12 && trackSession && !state.trackSim) {
+        fallbackTrackHands('真實追蹤時後鏡頭手勢較吃力，已改用點選圖示與 ‹ › 切換');
+        return;
+      }
+    } else {
+      trackHandSlow = Math.max(0, trackHandSlow - 1);
+    }
+    handleTrackHands(res.landmarks?.[0], src);
+  } catch (e) {
+    trackHandFails++;
+    if (trackHandFails >= 8) fallbackTrackHands('後鏡頭手勢無法同時執行，已改用點選與 ‹ ›');
+  }
+}
+
+function handleTrackHands(lm, src) {
+  if (!lm) {
+    hoverHold.index = -1;
+    swipeHand.x = null;
+    return;
+  }
+  const pose = classifyPose(lm).g;
+  const tip = lm[8];
+  if (pose !== 'index' || !tip) {
+    hoverHold.index = -1;
+    swipeHand.x = null;
+    swipeHand.armed = false;
+    return;
+  }
+  if (swipeHand.x == null) {
+    swipeHand.x = tip.x;
+    swipeHand.armed = true;
+  } else if (swipeHand.armed && Math.abs(tip.x - swipeHand.x) > 0.18) {
+    swipeHand.armed = false;
+    setTrackItem((state.trackItemIndex || 0) + (tip.x < swipeHand.x ? 1 : -1));
+    hoverHold.cool = performance.now() + 500;
+  }
+  if (performance.now() < (hoverHold.cool || 0)) return;
+  const menu = arMenuHost || (trackSession && typeof trackSession.projectIcons === 'function' ? trackSession : null);
+  if (!menu?.projectIcons) return;
+  const w = innerWidth, h = innerHeight;
+  const cam = (trackSession?._internal?.camera) || camera;
+  const pts = menu.projectIcons(cam, w, h);
+  const scr = videoNormToScreen(src, tip.x, tip.y, w, h);
+  let hit = -1, best = 1e9;
+  for (const p of pts || []) {
+    if (p.z > 1.2 || p.z < -1.2) continue;
+    const d = Math.hypot(p.x - scr.x, p.y - scr.y);
+    if (d < p.r && d < best) { best = d; hit = p.index; }
+  }
+  if (hit < 0) { hoverHold.index = -1; return; }
+  if (hoverHold.index !== hit) { hoverHold.index = hit; hoverHold.t = performance.now(); return; }
+  if (performance.now() - hoverHold.t >= 400 && hit !== (state.trackItemIndex || 0)) {
+    setTrackItem(hit);
+    hoverHold.cool = performance.now() + 600;
+    hoverHold.index = -1;
+  }
+}
+
+const menuRay = new THREE.Raycaster();
+const menuNdc = new THREE.Vector2();
+function pickArMenu(e) {
+  if (!arMenuHost) return;
+  const r = canvas.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;
+  menuNdc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  menuRay.setFromCamera(menuNdc, camera);
+  const i = arMenuHost.pick(menuRay);
+  if (i >= 0) setTrackItem(i);
+}
+
+async function ensureTrackHands() {
+  try {
+    await initLandmarker({ quiet: true });
+    if (landmarker) startTrackHandLoop();
+  } catch (e) {
+    console.warn(e);
+    state.trackHands = 'fallback';
+    state.trackHandsWhy = '手勢模組尚未就緒，可用點選圖示或 ‹ › 切換';
+  }
+}
+
 function detect(now) {
   if (ar.session || renderer.xr.isPresenting) return; // AR 進行中暫停手勢相機推論
   if (!state.camOn || state.appMode === 'track') return;
@@ -1616,7 +1796,7 @@ function updateDebug(r) {
     `cam=${state.camMode} kind=${state.dualKind || '-'} facing=${state.facing} on=${!!state.camOn}`,
     `fps det=${fpsMeter.detFps || 0} infer=${Math.round(fpsMeter.detMs)}ms rend=${fpsMeter.drawFps || 0} rvfc=${fpsMeter.rvfc ? 1 : 0} src=${fpsMeter.srcW || '-'}`,
     `clearAlpha=${renderer.getClearAlpha()} still=${stillIsNonBlack() ? 'ok' : 'no'} bg=${scene.background == null ? 'null' : 'set'}`,
-    state.trackSim ? `sim canv=${canvas.width}x${canvas.height} css=${canvas.clientWidth}x${canvas.clientHeight} meshes=${state.simMeshCount ?? 0} frames=${state.simFrames || 0}` : `asset=${ASSET_VER}`,
+    state.trackSim ? `sim canv=${canvas.width}x${canvas.height} css=${canvas.clientWidth}x${canvas.clientHeight} meshes=${state.simMeshCount ?? 0} frames=${state.simFrames || 0} hands=${state.trackHands || '-'} ` : `asset=${ASSET_VER} hands=${state.trackHands || '-'}`,
   ].join('\n');
 }
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
@@ -1757,14 +1937,14 @@ function syncTrackPips(index) {
 }
 
 const TRACK_ITEMS = [
-  { id: 'all', zh: '整機', spec: '2U 機架式伺服器（示例）', groups: null, hue: '#3aa0ff' },
-  { id: 'board', zh: '主機板', spec: '伺服器主機板（示例）', groups: ['board'], hue: '#5ad0c8' },
-  { id: 'cpu', zh: 'CPU', spec: '雙路 CPU 散熱器（示例）', groups: ['cpu'], hue: '#e8ba4a' },
-  { id: 'ram', zh: '記憶體', spec: 'DDR5 RDIMM ×16（示例）', groups: ['ram'], hue: '#7cbcff' },
-  { id: 'drive', zh: '硬碟', spec: '3.5" 熱插拔硬碟 ×12（示例）', groups: ['drive'], hue: '#9ad36a' },
-  { id: 'psu', zh: '電源', spec: '備援電源供應器 ×2（示例）', groups: ['psu'], hue: '#ff9a3a' },
-  { id: 'fan', zh: '風扇', spec: '80mm 風扇牆 ×4（示例）', groups: ['fan'], hue: '#c9d6e6' },
-  { id: 'pcie', zh: '擴充卡', spec: 'PCIe 網路擴充卡（示例）', groups: ['pcie'], hue: '#d07cff' },
+  { id: 'all', zh: '整機', spec: '2U 機架式伺服器（示例）', groups: null, hue: '#3aa0ff', glyph: 'server' },
+  { id: 'board', zh: '主機板', spec: '伺服器主機板（示例）', groups: ['board'], hue: '#5ad0c8', glyph: 'board' },
+  { id: 'cpu', zh: 'CPU', spec: '雙路 CPU 散熱器（示例）', groups: ['cpu'], hue: '#e8ba4a', glyph: 'cpu' },
+  { id: 'ram', zh: '記憶體', spec: 'DDR5 RDIMM ×16（示例）', groups: ['ram'], hue: '#7cbcff', glyph: 'ram' },
+  { id: 'drive', zh: '硬碟', spec: '3.5" 熱插拔硬碟 ×12（示例）', groups: ['drive'], hue: '#9ad36a', glyph: 'drive' },
+  { id: 'psu', zh: '電源', spec: '備援電源供應器 ×2（示例）', groups: ['psu'], hue: '#ff9a3a', glyph: 'psu' },
+  { id: 'fan', zh: '風扇', spec: '80mm 風扇牆 ×4（示例）', groups: ['fan'], hue: '#c9d6e6', glyph: 'fan' },
+  { id: 'pcie', zh: '擴充卡', spec: 'PCIe 網路擴充卡（示例）', groups: ['pcie'], hue: '#d07cff', glyph: 'pcie' },
 ];
 function trackItemList() { return trackMod?.ITEMS || TRACK_ITEMS; }
 
@@ -1839,13 +2019,11 @@ function layoutTrackSim() {
   }
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
-  const { top, bottom } = trackOverlayInsets();
-  const y = Math.max(0, Math.round(top));
-  const clearH = Math.max(1, Math.round(h - top - bottom));
-  camera.setViewOffset(w, h, 0, y, w, clearH);
-  camera.aspect = w / clearH;
+  try { camera.clearViewOffset(); } catch {}
+  camera.aspect = w / Math.max(h, 1);
   camera.updateProjectionMatrix();
-  state.trackClear = { top: y, bottom, width: w, height: h, clearH };
+  const { top, bottom } = trackOverlayInsets();
+  state.trackClear = { top, bottom, width: w, height: h, clearH: Math.max(1, h - top - bottom) };
 }
 
 let simBgStream = null;
@@ -1859,12 +2037,13 @@ function countSimMeshes() {
   return n;
 }
 
-function applyHostSimItem(index) {
+function applyHostSimItem(index, { fromMenu = false } = {}) {
   const items = trackItemList();
   const n = items.length || 8;
   const i = ((index % n) + n) % n;
   const item = items[i] || { id: 'all', zh: '整機', spec: '', groups: null, hue: '#3aa0ff' };
   applyTrackItemLabel(item, i);
+  if (arMenuHost && !fromMenu) arMenuHost.setIndex(i);
   const all = item.id === 'all' || !item.groups;
   const selected = new Set(item.groups || []);
   const byObj = new Map(parts.map((p) => [p.obj, p.group]));
@@ -1924,12 +2103,46 @@ function restoreSimMaterials() {
   });
 }
 
+function loadCardTexture() {
+  if (cardTex) return Promise.resolve(cardTex);
+  return new Promise((resolve) => {
+    new THREE.TextureLoader().load(rel('track/card.png'), (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      cardTex = tex;
+      resolve(tex);
+    }, undefined, () => resolve(null));
+  });
+}
+
 function attachHostGlForSim() {
   const box = $('#trackAr');
   if (!box) throw new Error('找不到追蹤畫面容器');
   box.appendChild(canvas);
   renderer.setClearColor(0x000000, 0);
   scene.background = null;
+  if (!arMenuHost) {
+    arMenuHost = createArMenu(THREE, {
+      items: TRACK_ITEMS,
+      showCard: true,
+      cardMap: cardTex || null,
+      radius: 0.70,
+      disc: 0.105,
+      cardW: 0.98,
+      cardH: 0.66,
+      modelY: 0.02,
+      onSelect: (item, i) => {
+        state.trackItemIndex = i;
+        applyHostSimItem(i, { fromMenu: true });
+      },
+    });
+    scene.add(arMenuHost.root);
+  }
+  if (pivot.parent !== arMenuHost.modelSpin) {
+    pivot.parent?.remove(pivot);
+    arMenuHost.modelSpin.add(pivot);
+  }
+  pivot.rotation.set(0, 0.25, 0);
+  pivot.scale.setScalar(0.20);
   pivot.visible = true;
   if (modelRoot) modelRoot.visible = true;
   if (shadow) shadow.visible = false;
@@ -1937,12 +2150,28 @@ function attachHostGlForSim() {
   state.explode = 0;
   setExplodePositions(0);
   state.simFrames = 0;
+  state.arMenuOn = true;
+  state.arIconCount = arMenuHost.icons.length;
+  state.arHasBubble = !!arMenuHost.bubble;
   countSimMeshes();
 }
 
 function detachHostGlFromSim() {
+  stopTrackHandLoop();
   try { camera.clearViewOffset(); } catch {}
   restoreSimMaterials();
+  if (arMenuHost) {
+    try { arMenuHost.modelSpin.remove(pivot); } catch {}
+    try { scene.remove(arMenuHost.root); } catch {}
+    try { arMenuHost.dispose(); } catch {}
+    arMenuHost = null;
+  }
+  state.arMenuOn = false;
+  state.arIconCount = 0;
+  state.arHasBubble = false;
+  if (pivot.parent !== scene) scene.add(pivot);
+  pivot.rotation.set(0, 0, 0);
+  pivot.scale.setScalar(1);
   if (shadow) shadow.visible = true;
   if (glHomeNext && glHomeNext.parentNode === glHomeParent) glHomeParent.insertBefore(canvas, glHomeNext);
   else if (glHomeParent) glHomeParent.appendChild(canvas);
@@ -2126,7 +2355,7 @@ async function stopCardSimulate({ keepSession = true, skipHud = false } = {}) {
   }
   if (skipHud) return;
   const hint = $('#trackLabel .hint');
-  if (hint) hint.textContent = '轉動卡片約 45°，或輕觸畫面切換';
+  if (hint) hint.textContent = '點圖示或按 ‹ › 也可切換';
   if (keepSession && wasSim && state.appMode === 'track') {
     document.body.classList.add('searching');
     document.body.classList.remove('found');
@@ -2161,20 +2390,23 @@ async function startCardSimulate() {
     document.body.classList.remove('searching', 'track-error');
     $('#trackIntro')?.classList.add('hide');
     const hasCam = await startSimBackgroundVideo();
+    await loadCardTexture();
     attachHostGlForSim();
     state.trackSim = true;
     state.trackSimKind = 'host';
     trackSim = { kind: 'host' };
-    state.tYaw = YAW0; state.tPitch = PITCH0; state.tZoom = 1;
-    state.yaw = YAW0; state.pitch = PITCH0; state.zoom = 1;
+    state.tYaw = 0; state.tPitch = 0.68; state.tZoom = 1;
+    state.yaw = 0; state.pitch = 0.68; state.zoom = 1;
     applyHostSimItem(state.trackItemIndex || 0);
+    if (arMenuHost) arMenuHost.setIndex(state.trackItemIndex || 0, { instant: true, silent: true });
     renderer.setAnimationLoop(frame);
     if (btn) { btn.disabled = false; btn.textContent = '結束模擬'; }
     const hint = $('#trackLabel .hint');
-    if (hint) hint.textContent = '拖曳旋轉、捏合縮放；點圓點或左右切換零件';
-    setTrackHudOpen(true);
+    if (hint) hint.textContent = '食指向左／右滑切換，或將食指停在圖示上約 0.4 秒';
+    setTrackHudOpen(false, { autoHide: false });
     requestAnimationFrame(() => { layoutTrackSim(); countSimMeshes(); });
-    setTrackStatus('模擬卡片：模型已載入（' + (hasCam ? '後鏡頭當背景' : '無相機，深色背景') + '）。可切換 8 個項目，再按一次即可結束。');
+    setTrackStatus('模擬卡片：環形選單已在 AR 場景中。' + (hasCam ? '可用食指滑動或停留選取（後鏡頭）。' : '無相機時請點圖示或 ‹ ›。'));
+    ensureTrackHands();
   } catch (e) {
     console.warn(e);
     try { detachHostGlFromSim(); } catch {}
@@ -2423,8 +2655,9 @@ async function startTrackSession() {
           document.body.classList.add('found');
           document.body.classList.remove('searching');
           state.trackFound = true;
-          setTrackStatus('已找到卡片');
-          setTrackHudOpen(true);
+          setTrackStatus('已找到卡片。食指向左／右滑切換，或將食指停在圖示上選取。');
+          setTrackHudOpen(false, { autoHide: false });
+          ensureTrackHands();
         },
         onLost: () => {
           if (state.trackSim) return;
@@ -2447,7 +2680,8 @@ async function startTrackSession() {
     state.camPermitted = true;
     state.trackCamAllowed = true;
     syncTrackPips(0);
-    setTrackStatus('後鏡頭已開啟。請將鏡頭對準卡片（資源已預載，偵測到就會立刻出現模型）。');
+    setTrackStatus('後鏡頭已開啟。請對準卡片；選單會圍在卡片周圍，可用食指滑動切換。');
+    ensureTrackHands();
   } catch (e) {
     console.warn(e);
     const why = explainTrackError(e);
@@ -2468,6 +2702,7 @@ async function startTrackSession() {
 }
 
 async function stopTrackSession({ resetHud = true } = {}) {
+  stopTrackHandLoop();
   if (resetHud && (state.trackSim || trackSim)) {
     await stopCardSimulate({ keepSession: false, skipHud: true });
   }
@@ -2489,7 +2724,7 @@ async function enterTrackMode() {
   try { renderer.setAnimationLoop(null); } catch {}
   if (state.soundOn && snd.unlocked) fadeEqPower(snd.gain, Math.min(0.04, QUIET_GAIN), 0.4);
   const tEl = $('#docTitle'); if (tEl) tEl.textContent = '圖像追蹤';
-  const n = $('#deviceName'); if (n) n.textContent = '對準卡片，轉動切換零件';
+  const n = $('#deviceName'); if (n) n.textContent = '對準卡片，用手勢切換零件';
   resetTrackHud();
   setTrackStatus(trackAssets ? '資源已就緒。正在準備後鏡頭…' : '正在預載追蹤資源…');
   const tEnter = performance.now();

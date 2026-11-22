@@ -48,8 +48,8 @@ let failed = 0;
 const ok = (n, c, extra) => { if (c) console.log('  PASS', n); else { failed++; console.log('  FAIL', n, extra ?? ''); } };
 function analyzeShot(pngPath) {
   const out = execFileSync('python3', [path.join(path.dirname(fileURLToPath(import.meta.url)), 'analyze_shot.py'), pngPath], { encoding: 'utf8' });
-  const [lit, n, maxL, ratio] = out.trim().split(/\s+/).map(Number);
-  return { lit, n, maxL, ratio };
+  const [lit, n, maxL, ratio, white, whiteRatio, ring] = out.trim().split(/\s+/).map(Number);
+  return { lit, n, maxL, ratio, white, whiteRatio, ring };
 }
 
 
@@ -72,7 +72,7 @@ async function run(name, type, launchOpts, grantCam) {
   await page.waitForTimeout(400);
   await page.click('#trackSimBtn');
   await page.waitForFunction(() => window.__demo?.trackSim === true && (window.__demo.simFrames || 0) > 8, { timeout: 30000 });
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(1200);
   const info = await page.evaluate(() => {
     const gl = document.querySelector('#gl');
     const cs = getComputedStyle(gl);
@@ -86,17 +86,28 @@ async function run(name, type, launchOpts, grantCam) {
       buf: [gl.width, gl.height],
       meshes: __demo.simMeshCount,
       frames: __demo.simFrames,
+      arMenuOn: !!__demo.arMenuOn,
+      arIconCount: __demo.arIconCount,
+      arHasBubble: !!__demo.arHasBubble,
       debug: document.querySelector('#gdebug')?.textContent || '',
     };
   });
-  const shot = path.join(OUT, `${name}-simulate-after.png`);
+  await page.evaluate(() => {
+    const g = document.querySelector('#gdebug');
+    if (g) g.style.display = 'none';
+    document.querySelector('#trackStatus')?.classList.add('faded');
+  });
+  await page.waitForTimeout(200);
+  const shot = path.join(OUT, `${name}-simulate-menu.png`);
   await page.screenshot({ path: shot, fullPage: false });
   const pixels = analyzeShot(shot);
   console.log('====', name, '====');
   console.log(info, pixels, shot);
   ok(`${name} uses host renderer`, info.kind === 'host' && info.parent === 'trackAr' && info.display === 'block' && info.w > 100, info);
   ok(`${name} debug has canvas/meshes/frames`, /sim canv=\d+x\d+/.test(info.debug) && info.meshes > 0 && info.frames > 8, info);
+  ok(`${name} AR ring menu in scene`, info.arMenuOn && info.arIconCount === 8 && info.arHasBubble, info);
   ok(`${name} model pixels visible in #gl`, pixels.ratio > 0.02 && pixels.maxL > 40, pixels);
+  ok(`${name} label bubble visible`, pixels.white > 80 || pixels.whiteRatio > 0.002, pixels);
   await browser.close();
   return { info, pixels, shot };
 }

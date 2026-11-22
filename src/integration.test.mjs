@@ -402,47 +402,46 @@ try {
     ok('模擬卡片 shows model and 結束模擬', sim.on && sim.cls && sim.btn.includes('結束模擬') && sim.introHidden && host.kind === 'host', { sim, host });
     ok('simulate uses host #gl over the track view', host.parent === 'trackAr' && host.display === 'block' && host.vis === 'visible' && host.w > 100 && host.h > 100 && host.meshes > 0, host);
     ok('debug overlay reports canvas/meshes/frames', /sim canv=\d+x\d+/.test(host.debug) && /meshes=\d+/.test(host.debug) && /frames=\d+/.test(host.debug), host.debug);
-    ok('模擬卡片 has 8 switchable pips + prev/next', sim.pips === 8 && sim.nav && sim.name === '整機', sim);
+    const menu = await p.evaluate(() => ({
+      on: !!__demo.arMenuOn,
+      icons: __demo.arIconCount,
+      bubble: !!__demo.arHasBubble,
+      nav: !!document.querySelector('#trackPrev') && !!document.querySelector('#trackNext'),
+    }));
+    ok('模擬卡片 has in-scene AR ring menu + ‹ › fallbacks', menu.on && menu.icons === 8 && menu.bubble && menu.nav, menu);
     await p.click('#trackNext');
-    await sleep(300);
+    await sleep(400);
     const stepped = await p.evaluate(() => ({
       index: __demo.trackItemIndex,
-      name: document.querySelector('#trackHudToggle .hud-name')?.textContent || document.querySelector('#trackLabel .name')?.textContent || '',
+      name: document.querySelector('#trackLabel .name')?.textContent || '',
     }));
-    ok('next / pips switch item in simulate mode', stepped.index === 1 && stepped.name && stepped.name !== '整機', stepped);
-    await p.evaluate(() => window.__demo.setTrackHudOpen(true, { autoHide: false }));
-    await p.evaluate(() => document.querySelectorAll('#trackPips .pip')[3]?.click());
-    await sleep(200);
-    const piped = await p.evaluate(() => ({ index: __demo.trackItemIndex, name: document.querySelector('#trackHudToggle .hud-name')?.textContent || '' }));
-    ok('pip 3 selects 4th item', piped.index === 3 && !!piped.name, piped);
+    ok('‹ › switch item in simulate mode', stepped.index === 1 && stepped.name && stepped.name !== '整機', stepped);
+    await p.click('#trackNext');
+    await p.click('#trackNext');
+    await p.click('#trackNext');
+    await sleep(400);
+    const piped = await p.evaluate(() => ({ index: __demo.trackItemIndex, name: document.querySelector('#trackLabel .name')?.textContent || '' }));
+    ok('‹ › can step to the 4th item', piped.index === 4 && !!piped.name, piped);
 
-    await p.evaluate(() => window.__demo.setTrackHudOpen(true));
     await sleep(2300);
     const hidden = await p.evaluate(() => {
-      const detail = document.querySelector('#trackHudDetail');
       const status = document.querySelector('#trackStatus');
       const actions = document.querySelector('#trackActions');
       const ar = document.querySelector('#trackAr').getBoundingClientRect();
       const top = actions.getBoundingClientRect();
       const hud = document.querySelector('#trackHud').getBoundingClientRect();
       return {
-        open: !!__demo.trackHudOpen,
-        cls: document.body.classList.contains('track-hud-open'),
-        detailDisplay: getComputedStyle(detail).display,
         statusFaded: status.classList.contains('faded') || getComputedStyle(status).opacity === '0',
         actionH: Math.round(top.height),
         clearTop: top.bottom - ar.top,
         clearBot: ar.bottom - hud.top,
         arH: ar.height,
+        prevVisible: getComputedStyle(document.querySelector('#trackPrev')).display !== 'none',
       };
     });
-    ok('info panel auto-hides after ~2s', !hidden.open && !hidden.cls && hidden.detailDisplay === 'none', hidden);
     ok('top hint/actions are compact and status fades', hidden.actionH <= 36 && hidden.statusFaded, hidden);
     ok('model clear area sits between top and bottom UI', hidden.clearTop > 0 && hidden.clearBot > 0 && (hidden.arH - hidden.clearTop - hidden.clearBot) > hidden.arH * 0.45, hidden);
-    await p.click('#trackHudToggle');
-    const shown = await p.evaluate(() => ({ open: !!__demo.trackHudOpen, display: getComputedStyle(document.querySelector('#trackHudDetail')).display }));
-    ok('tap shows collapsed info panel', shown.open && shown.display === 'flex', shown);
-    await p.evaluate(() => window.__demo.setTrackHudOpen(false, { autoHide: false }));
+    ok('‹ › fallback stays available', hidden.prevVisible, hidden);
     await p.click('#trackSimBtn');
     await p.waitForFunction(() => window.__demo?.trackSim !== true, { timeout: 8000 }).catch(() => {});
     const ended = await p.evaluate(() => ({
