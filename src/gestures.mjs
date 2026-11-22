@@ -6,8 +6,9 @@ export const VOTE_N = 6;
 export const VOTE_NEED = 4;
 export const YAW_GAIN = 5.5;
 export const PITCH_GAIN = 3.5;
-export const ROT_DEADZONE = 0.003;
-export const ROT_SMOOTH = 0.45;
+export const ROT_DEADZONE = 0.001;
+export const ROT_SMOOTH = 0.35;
+export const INERTIA_SMOOTH = 0.18; // 放開後速度朝 0 衰減（比跟隨時更慢，保留慣性）
 export const PINCH_MAX = 0.45;
 export const CURL_RATIO = 1.1;
 
@@ -24,6 +25,12 @@ export function palmCenter(lm) {
     x: (lm[0].x + lm[5].x + lm[17].x) / 3,
     y: (lm[0].y + lm[5].y + lm[17].y) / 3,
   };
+}
+
+/** 食指指尖（旋轉用） */
+export function indexTip(lm) {
+  if (!lm || !lm[8]) return null;
+  return { x: lm[8].x, y: lm[8].y };
 }
 
 export function applyMirrorX(palm, { facing, camMode } = {}) {
@@ -59,13 +66,9 @@ export function classifyPose(lm) {
   const pinchD = D(lm[4], lm[8]) / size;
   const info = { pinchD, nExt, nCurled, curled, ext, thumbOut: D(lm[4], lm[17]) / size > 0.9 };
 
-  // pinch：拇指食指靠近，其他手指不限；食指需伸在外面，才不會把握拳當捏合
   if (pinchD < PINCH_MAX && !curled[0]) return { g: 'pinch', ...info };
-  // 只伸食指：左右移動旋轉
   if (ext[0] && nExt === 1) return { g: 'index', ...info };
-  // 握拳：至少三指捲曲，不理拇指
   if (nCurled >= 3) return { g: 'fist', ...info };
-  // 張開：四指伸直
   if (nExt >= 4) return { g: 'open', ...info };
   return { g: 'move', ...info };
 }
@@ -76,8 +79,13 @@ function majority(votes) {
   for (const g of votes) c[g] = (c[g] || 0) + 1;
   const ranked = Object.entries(c).sort((a, b) => b[1] - a[1]);
   const [best, n] = ranked[0];
-  if ((best === 'open' || best === 'fist' || best === 'pinch' || best === 'index') && n >= VOTE_NEED) return best;
+  if ((best === 'open' || best === 'fist') && n >= VOTE_NEED) return best;
   return 'move';
+}
+
+function smoothToward(cur, target, dt, rate) {
+  const k = 1 - Math.pow(1 - rate, Math.max(0, dt) * 60);
+  return cur + (target - cur) * k;
 }
 
 export function createGestureMachine() {
@@ -85,14 +93,17 @@ export function createGestureMachine() {
     pose: 'none',
     raw: 'none',
     votes: [],
-    prevPalm: null,
+    prevTip: null,
     prevNow: 0,
     hold: 0,
     holdPose: null,
     cooldownUntil: 0,
     pinchRef: null,
-    smDx: 0,
-    smDy: 0,
+    velX: 0,
+    velY: 0,
+    targetVelX: 0,
+    targetVelY: 0,
+    indexLive: false,
     lastAction: '',
     lastActionAt: 0,
     nExt: 0,
@@ -100,27 +111,32 @@ export function createGestureMachine() {
     pinchD: 0,
   };
 
-  function resetAll() {
+  function resetAll({ keepInertia = false } = {}) {
     s.pose = 'none';
     s.raw = 'none';
     s.votes = [];
-    s.prevPalm = null;
+    s.prevTip = null;
     s.prevNow = 0;
     s.hold = 0;
     s.holdPose = null;
     s.pinchRef = null;
-    s.smDx = 0;
-    s.smDy = 0;
+    s.indexLive = false;
+    s.targetVelX = 0;
+    s.targetVelY = 0;
+    if (!keepInertia) {
+      s.velX = 0;
+      s.velY = 0;
+    }
   }
 
-  function update({ now, landmarks, mirrored = false, ignore = false, zoom = 1, clampZ = (z) => z }) {
-    const out = {
+  function snapshot(outExtra = {}) {
+    return {
       pose: s.pose,
-      raw: 'none',
+      raw: s.raw,
       status: 'none',
       dYaw: 0,
       dPitch: 0,
-      zoom,
+      zoom: 1,
       charge: 0,
       chargeLabel: null,
       triggered: null,
@@ -129,14 +145,35 @@ export function createGestureMachine() {
       nCurled: s.nCurled,
       pinchD: s.pinchD,
       hold: s.hold,
+      velX: s.velX,
+      velY: s.velY,
+      ...outExtra,
     };
+  }
 
+  /** 每幀呼叫（約 60fps）：把速度平滑後換成角度增量，放開後帶慣性。 */
+  function tick(dt) {
+    if (!Number.isFinite(dt) || dt <= 0) return { dYaw: 0, dPitch: 0, velX: s.velX, velY: s.velY };
+    dt = Math.min(0.08, dt);
+    const rate = s.indexLive ? ROT_SMOOTH : INERTIA_SMOOTH;
+    s.velX = smoothToward(s.velX, s.targetVelX, dt, rate);
+    s.velY = smoothToward(s.velY, s.targetVelY, dt, rate);
+    if (!s.indexLive && Math.hypot(s.velX, s.velY) < 1e-4) {
+      s.velX = 0;
+      s.velY = 0;
+    }
+    return { dYaw: s.velX * dt, dPitch: s.velY * dt, velX: s.velX, velY: s.velY };
+  }
+
+  function update({ now, landmarks, mirrored = false, ignore = false, zoom = 1, clampZ = (z) => z }) {
     const dt = s.prevNow ? Math.max(0.016, Math.min(0.08, (now - s.prevNow) / 1000)) : 1 / 30;
+    const out = snapshot({ zoom });
 
     if (!landmarks) {
-      resetAll();
+      resetAll({ keepInertia: true });
       s.prevNow = now;
       out.pose = 'none';
+      out.raw = 'none';
       out.status = 'none';
       return out;
     }
@@ -151,36 +188,44 @@ export function createGestureMachine() {
     out.nCurled = cls.nCurled;
     out.pinchD = cls.pinchD;
 
-    s.votes.push(cls.g);
-    if (s.votes.length > VOTE_N) s.votes.shift();
-    const pose = majority(s.votes);
+    // 旋轉／捏合：看到姿態立刻生效，不走多數決。張開／握拳才投票。
+    let pose;
+    if (cls.g === 'pinch' || cls.g === 'index') {
+      pose = cls.g;
+      s.votes = [];
+    } else {
+      s.votes.push(cls.g === 'open' || cls.g === 'fist' ? cls.g : 'move');
+      if (s.votes.length > VOTE_N) s.votes.shift();
+      pose = majority(s.votes);
+    }
     s.pose = pose;
     out.pose = pose;
 
-    let palm = palmCenter(landmarks);
-    if (mirrored) palm = { x: 1 - palm.x, y: palm.y };
-    const dx = s.prevPalm ? palm.x - s.prevPalm.x : 0;
-    const dy = s.prevPalm ? palm.y - s.prevPalm.y : 0;
-    s.prevPalm = palm;
-    s.prevNow = now;
+    let tip = indexTip(landmarks) || palmCenter(landmarks);
+    if (mirrored) tip = { x: 1 - tip.x, y: tip.y };
 
     if (ignore) {
       s.hold = 0;
       s.holdPose = null;
-      s.smDx = 0;
-      s.smDy = 0;
+      s.indexLive = false;
+      s.targetVelX = 0;
+      s.targetVelY = 0;
+      s.prevTip = tip;
+      s.prevNow = now;
       out.status = pose === 'none' ? 'none' : pose;
       return out;
     }
 
     const cooling = now < s.cooldownUntil;
 
-    // 捏合縮放（最高優先）
     if (pose === 'pinch') {
       s.hold = 0;
       s.holdPose = null;
-      s.smDx = 0;
-      s.smDy = 0;
+      s.indexLive = false;
+      s.targetVelX = 0;
+      s.targetVelY = 0;
+      s.prevTip = tip;
+      s.prevNow = now;
       if (!s.pinchRef) s.pinchRef = { d: Math.max(0.12, cls.pinchD), z: zoom };
       out.zoom = clampZ(s.pinchRef.z * Math.pow(Math.max(0.05, cls.pinchD) / s.pinchRef.d, 0.9));
       out.status = 'pinch';
@@ -188,23 +233,31 @@ export function createGestureMachine() {
     }
     s.pinchRef = null;
 
-    // 只伸食指：左右／上下移動旋轉（僅此姿態）
     if (pose === 'index') {
       s.hold = 0;
       s.holdPose = null;
+      s.indexLive = true;
+      const dx = s.prevTip ? tip.x - s.prevTip.x : 0;
+      const dy = s.prevTip ? tip.y - s.prevTip.y : 0;
+      s.prevTip = tip;
+      s.prevNow = now;
       const lx = Math.abs(dx) > ROT_DEADZONE ? dx : 0;
       const ly = Math.abs(dy) > ROT_DEADZONE ? dy : 0;
-      s.smDx += (lx - s.smDx) * ROT_SMOOTH;
-      s.smDy += (ly - s.smDy) * ROT_SMOOTH;
-      out.dYaw = s.smDx * YAW_GAIN;
-      out.dPitch = s.smDy * PITCH_GAIN;
+      s.targetVelX = (lx / dt) * YAW_GAIN;
+      s.targetVelY = (ly / dt) * PITCH_GAIN;
       out.status = 'index';
+      out.velX = s.targetVelX;
+      out.velY = s.targetVelY;
       return out;
     }
-    s.smDx = 0;
-    s.smDy = 0;
 
-    // 張開／握拳：6 幀多數決後再維持約 0.3 秒，接著 0.8 秒冷卻
+    // 離開食指：目標速度歸零，tick 以慣性把剩餘速度帶完
+    s.indexLive = false;
+    s.targetVelX = 0;
+    s.targetVelY = 0;
+    s.prevTip = tip;
+    s.prevNow = now;
+
     const want = (pose === 'open' || pose === 'fist') ? pose : null;
     if (want && !cooling) {
       if (s.holdPose === want) s.hold += dt;
@@ -235,8 +288,14 @@ export function createGestureMachine() {
       out.status = pose === 'none' ? 'none' : pose;
     }
 
+    out.hold = s.hold;
     return out;
   }
 
-  return { update, reset: resetAll, getState: () => ({ ...s, votes: s.votes.slice() }) };
+  return {
+    update,
+    tick,
+    reset: () => resetAll({ keepInertia: false }),
+    getState: () => ({ ...s, votes: s.votes.slice() }),
+  };
 }

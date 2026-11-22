@@ -1,6 +1,8 @@
-/* 快取手勢模型與 Wasm，讓第二次開啟不必再下載 */
-const CACHE = 'gesture-demo-mp-v1';
-const HINT = /vision_wasm_internal\.(js|wasm)$|hand_landmarker\.task$/;
+/* 快取手勢模型與圖像追蹤資源，讓第二次開啟不必再下載 */
+const MP_CACHE = 'gesture-demo-mp-v1';
+const TRACK_CACHE = 'gesture-demo-track-v1';
+const MP_HINT = /vision_wasm_internal\.(js|wasm)$|hand_landmarker\.task$/;
+const TRACK_HINT = /\/track\/(track-mode\.bundle\.js|targets\.mind|card\.png|card\.html)$|\/models\/(server\.glb|parts\.json)$/;
 
 self.addEventListener('install', (e) => {
   e.waitUntil(self.skipWaiting());
@@ -9,7 +11,10 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter((k) => k.startsWith('gesture-demo-mp-') && k !== CACHE).map((k) => caches.delete(k)));
+    await Promise.all(keys.filter((k) =>
+      (k.startsWith('gesture-demo-mp-') && k !== MP_CACHE) ||
+      (k.startsWith('gesture-demo-track-') && k !== TRACK_CACHE)
+    ).map((k) => caches.delete(k)));
     await self.clients.claim();
   })());
 });
@@ -20,11 +25,13 @@ self.addEventListener('fetch', (event) => {
   let url;
   try { url = new URL(req.url); } catch { return; }
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.includes('/assembly/')) return; // 子路徑頁面自行載入，避免根目錄 SW 干預
-  if (url.pathname.includes('/track/')) return; // 圖像追蹤模組自行載入，不納入手勢 Wasm 快取、也不改快取版本
-  if (!HINT.test(url.pathname)) return;
+  if (url.pathname.includes('/assembly/')) return; // 舊組裝子路徑自行載入
+  let cacheName = null;
+  if (MP_HINT.test(url.pathname)) cacheName = MP_CACHE;
+  else if (TRACK_HINT.test(url.pathname)) cacheName = TRACK_CACHE;
+  if (!cacheName) return;
   event.respondWith((async () => {
-    const cache = await caches.open(CACHE);
+    const cache = await caches.open(cacheName);
     const hit = await cache.match(req, { ignoreSearch: true }) || await cache.match(url.href);
     if (hit) return hit;
     const res = await fetch(req);

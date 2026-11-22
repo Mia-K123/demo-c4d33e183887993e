@@ -77,9 +77,15 @@ function run(seq, { mirrored = false, fps = 30 } = {}) {
       const y = typeof step.y === 'function' ? step.y(i, n, now) : (step.y ?? 0.7);
       const lm = step.lm ? step.lm(i, n) : makeHand({ x, y, pose: step.pose, jitter: step.jitter || 0 });
       const r = g.update({ now, landmarks: step.lost ? null : lm, mirrored, zoom });
-      yaw += r.dYaw;
-      pitch += r.dPitch;
       zoom = r.zoom;
+      // 偵測 ~30fps、畫面 60fps：在兩個偵測之間補 tick
+      const steps = Math.max(1, Math.round((dt / 1000) * 60));
+      const slice = (dt / 1000) / steps;
+      for (let k = 0; k < steps; k++) {
+        const tr = g.tick(slice);
+        yaw += tr.dYaw;
+        pitch += tr.dPitch;
+      }
       if (r.triggered) events.push({ type: r.triggered, now, yaw, charge: r.charge });
     }
   }
@@ -210,10 +216,47 @@ const fail = (n, m) => { results.push({ n, ok: false, m }); console.error('FAIL'
     now += 1000 / 30;
     const x = 0.7 - 0.4 * (i / 23);
     const r = g.update({ now, landmarks: makeHand({ pose: 'index', x }), mirrored: true });
-    yaw += r.dYaw;
+    const tr = g.tick(1 / 30);
+    yaw += tr.dYaw;
   }
   if (yaw <= 0.25) fail('mirror-yaw-sign', `yaw=${yaw.toFixed(3)}`);
   else pass('mirror-yaw-sign', `yaw=${yaw.toFixed(3)}`);
+}
+
+// --- 食指旋轉：第一個位移幀立刻有 yaw（不必等多數決）---
+{
+  const g = createGestureMachine();
+  let yaw = 0, now = 1000;
+  g.update({ now, landmarks: makeHand({ pose: 'index', x: 0.3 }), mirrored: false });
+  now += 1000 / 30;
+  g.update({ now, landmarks: makeHand({ pose: 'index', x: 0.42 }), mirrored: false });
+  for (let k = 0; k < 2; k++) yaw += g.tick(1 / 60).dYaw;
+  if (yaw <= 0.02) fail('index-rotates-immediately', `yaw=${yaw.toFixed(4)}`);
+  else pass('index-rotates-immediately', `yaw=${yaw.toFixed(3)}`);
+}
+
+// --- 放開食指後慣性續轉，之後逐漸停下 ---
+{
+  const g = createGestureMachine();
+  let yaw = 0, now = 1000;
+  for (let i = 0; i < 10; i++) {
+    now += 1000 / 30;
+    g.update({ now, landmarks: makeHand({ pose: 'index', x: 0.3 + i * 0.03 }) });
+    yaw += g.tick(1 / 30).dYaw;
+  }
+  const afterMove = yaw;
+  // 手勢改張開（非食指），速度應帶一段慣性
+  now += 1000 / 30;
+  g.update({ now, landmarks: makeHand({ pose: 'open', x: 0.3 + 9 * 0.03 }) });
+  let coast = 0;
+  for (let k = 0; k < 20; k++) {
+    const d = g.tick(1 / 60).dYaw;
+    coast += d;
+    yaw += d;
+  }
+  if (!(afterMove > 0.2)) fail('index-inertia-move', `afterMove=${afterMove.toFixed(3)}`);
+  else if (!(coast > 0.01)) fail('index-inertia-coast', `coast=${coast.toFixed(4)} afterMove=${afterMove.toFixed(3)}`);
+  else pass('index-inertia', `move=${afterMove.toFixed(3)} coast=${coast.toFixed(3)}`);
 }
 
 const failed = results.filter((r) => !r.ok);

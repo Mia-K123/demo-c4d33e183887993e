@@ -150,7 +150,7 @@ try {
       const el = document.querySelector('#gdebug');
       return { shown: getComputedStyle(el).display !== 'none', text: el?.textContent || '' };
     });
-    ok('?debug=1 overlay visible', debugOn.shown && /clearAlpha/.test(debugOn.text), debugOn);
+    ok('?debug=1 overlay visible', debugOn.shown && /clearAlpha/.test(debugOn.text) && /fps det=/.test(debugOn.text), debugOn);
 
     await p.evaluate(() => window.__demo.setAppMode('assembly'));
     await p.waitForFunction(() => window.__demo.appMode === 'assembly' && window.__demo.assembly);
@@ -191,6 +191,53 @@ try {
     ok('assembly/ redirects to ?mode=assembly', u.search.includes('mode=assembly') && u.search.includes('ann=examples'), u);
     ok('redirect keeps device', u.search.includes('device=SRV-2U-DEMO'), u);
   });
+
+  // 背景預載：模型就緒後才抓 track bundle；進入分頁應幾乎立刻就緒
+  {
+    const timings = { reqs: [] };
+    const p = await browser.newPage();
+    p.setDefaultTimeout(90000);
+    await p.setCacheEnabled(true);
+    p.on('request', (r) => {
+      const u = r.url();
+      if (/track-mode\.bundle|targets\.mind|hand_landmarker|vision_wasm_internal/.test(u)) {
+        timings.reqs.push({ url: u.split('/').pop().split('?')[0], t: Date.now() });
+      }
+    });
+    const tNav = Date.now();
+    await p.goto(base + '?auto=touch', { waitUntil: 'load', timeout: 60000 });
+    await p.waitForFunction(() => window.__demo?.modelReady, { timeout: 60000 });
+    const tModel = Date.now();
+    const untilTrack = Date.now();
+    await p.waitForFunction(() => window.__demo?.trackReady, { timeout: 120000 });
+    const tReady = Date.now();
+    const info = await p.evaluate(() => ({
+      preloadMs: __demo.trackPreloadMs,
+      pct: __demo.trackPreloadPct,
+      status: __demo.trackPreloadStatus,
+      tab: document.querySelector('#trackTabProg')?.textContent,
+      mpDone: !!__demo.mpPrefetchDone,
+    }));
+    const firstTrack = timings.reqs.find((r) => r.url.includes('track-mode.bundle') || r.url.includes('targets.mind'));
+    const firstMp = timings.reqs.find((r) => r.url.includes('hand_landmarker') || r.url.includes('vision_wasm'));
+    ok('track prefetch starts after model ready', !firstTrack || firstTrack.t >= tModel - 50, { firstTrack, tModel: tModel - tNav });
+    if (firstTrack && firstMp) {
+      ok('track prefetch not before MP started', firstTrack.t + 20 >= firstMp.t, { firstTrack: firstTrack.t - tNav, firstMp: firstMp.t - tNav });
+    } else {
+      ok('track prefetch recorded (or already cached)', !!info.preloadMs || !!firstTrack, { reqs: timings.reqs, info });
+    }
+    ok('background preload reaches 已就緒', info.status === 'ready' && info.tab && info.tab.includes('已就緒'), info);
+    const tEnter0 = Date.now();
+    await p.evaluate(() => window.__demo.setAppMode('track'));
+    await p.waitForFunction(() => document.querySelector('#trackStart') && !document.querySelector('#trackStart').disabled);
+    const enterMs = await p.evaluate(() => __demo.trackEnterToReadyMs);
+    const enterWall = Date.now() - tEnter0;
+    ok('tab enter is instant when preloaded', (enterMs == null || enterMs < 400) && enterWall < 1500, { enterMs, enterWall, preloadMs: info.preloadMs });
+    console.log('  TIMING first-visit preloadMs=', info.preloadMs, 'enterToReadyMs=', enterMs, 'enterWall=', enterWall, 'modelToReady=', tReady - tModel);
+    // 模擬「以前」進入分頁才開始載入：preloadMs 就是使用者會等的時間
+    console.log('  TIMING before (tab waited for assets)=', info.preloadMs, 'ms; after (enter when preloaded)=', enterMs, 'ms');
+    await p.close();
+  }
 
   await withPage(browser, base + '?mode=track&auto=touch', async (p) => {
     await p.waitForFunction(() => window.__demo?.modelReady && window.__demo?.appMode === 'track', { timeout: 60000 });

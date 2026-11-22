@@ -140,11 +140,17 @@ function frame(now, xrFrame) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   // 平滑動畫
   const sp = 1 - Math.exp(-dt * 3.2);
+  const rotK = 1 - Math.pow(1 - 0.35, dt * 60);
   // 展開維持原本速度；收合加快，約 0.4 秒合上，對準音樂淡出與撞擊
   const closeK = state.target ? 3.6 : 7.5;
   state.explode += (state.target - state.explode) * (1 - Math.exp(-dt * closeK));
   if (Math.abs(state.target - state.explode) < 0.001) state.explode = state.target;
-  state.yaw += (state.tYaw - state.yaw) * sp * 2; state.pitch += (state.tPitch - state.pitch) * sp * 2;
+  if (state.camOn && state.appMode !== 'track') {
+    const tr = gesture.tick(dt);
+    state.tYaw += tr.dYaw;
+    state.tPitch = clampP(state.tPitch + tr.dPitch);
+  }
+  state.yaw += (state.tYaw - state.yaw) * rotK; state.pitch += (state.tPitch - state.pitch) * rotK;
   state.zoom += (state.tZoom - state.zoom) * sp * 2;
   if (assembly?.state.active) assembly.tick(now);
   else setExplodePositions(state.explode);
@@ -161,8 +167,8 @@ function frame(now, xrFrame) {
     camera.lookAt(0, cy - rad * (portrait ? 0.06 : 0.04), 0);
     if (!assembly?.state.active) updateLabels();
     else { for (const gr of Object.values(groups)) if (gr.el) gr.el.style.opacity = 0; }
-    if (state.camOn && state.appMode !== 'track') detect(now);
   }
+  noteRenderFps(now);
   updateDebug(state.gLast);
   if (snd.thudWhen && snd.ctx && snd.ctx.currentTime >= snd.thudWhen) {
     snd.thudWhen = 0;
@@ -1020,8 +1026,9 @@ async function attachVideo(el, stream) {
   el.setAttribute('webkit-playsinline', '');
   el.setAttribute('muted', '');
   try { await el.play(); } catch {}
-  if (el.readyState >= 2) return;
+  if (el.readyState >= 2) { state.camPermitted = true; return; }
   try { await waitEvent(el, 'loadeddata', 2000); } catch {}
+  state.camPermitted = true;
 }
 
 async function waitTrackReady(stream, ms = 500) {
@@ -1157,6 +1164,7 @@ async function startCamera() {
   await attachVideo(video, state.stream);
   setTrackSource(video);
   state.camOn = true;
+  startDetectLoop();
   ignoreGesturesUntil = performance.now() + 800;
   gesture.reset();
   persistCam();
@@ -1192,6 +1200,7 @@ async function startDualStill(existingRear) {
   if (fst.deviceId) state.deviceId = fst.deviceId;
   setTrackSource(videoFront);
   state.camOn = true;
+  startDetectLoop();
   ignoreGesturesUntil = performance.now() + 800;
   gesture.reset();
   persistCam();
@@ -1250,6 +1259,7 @@ async function startDualCamera() {
     if (fst.deviceId) state.deviceId = fst.deviceId;
     setTrackSource(videoFront);
     state.camOn = true;
+    startDetectLoop();
     ignoreGesturesUntil = performance.now() + 800;
     gesture.reset();
     persistCam();
@@ -1275,6 +1285,7 @@ async function startDualCamera() {
 }
 
 function stopCamera({ keepStill = false } = {}) {
+  stopDetectLoop();
   stopStream(state.stream);
   stopStream(state.rearStream);
   state.stream = null;
@@ -1448,12 +1459,81 @@ function updateChargeUI(r) {
   fg.setAttribute('stroke-dasharray', `${pct} 100`);
 }
 
+const DETECT_MAX = (isTouch || isIOS || isAndroid) ? 320 : 480;
+let detectCanvas = null, detectCtx = null, detectLoopOn = false, detectLoopToken = 0;
+const fpsMeter = { detN: 0, detT: 0, detFps: 0, detMs: 0, drawN: 0, drawT: 0, drawFps: 0, rvfc: false, srcW: 0 };
+
+function noteRenderFps(now) {
+  fpsMeter.drawN++;
+  if (!fpsMeter.drawT) fpsMeter.drawT = now;
+  const e = now - fpsMeter.drawT;
+  if (e >= 500) {
+    fpsMeter.drawFps = Math.round(fpsMeter.drawN * 1000 / e);
+    fpsMeter.drawN = 0;
+    fpsMeter.drawT = now;
+    state.rendFps = fpsMeter.drawFps;
+  }
+}
+
+function detectSource(videoEl) {
+  if (!videoEl || !videoEl.videoWidth) return videoEl;
+  const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+  if (vw <= DETECT_MAX) { fpsMeter.srcW = vw; return videoEl; }
+  const w = DETECT_MAX, h = Math.max(1, Math.round(vh * (DETECT_MAX / vw)));
+  if (!detectCanvas) {
+    detectCanvas = document.createElement('canvas');
+    detectCtx = detectCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  if (detectCanvas.width !== w || detectCanvas.height !== h) {
+    detectCanvas.width = w; detectCanvas.height = h;
+  }
+  detectCtx.drawImage(videoEl, 0, 0, w, h);
+  fpsMeter.srcW = w;
+  return detectCanvas;
+}
+
+function startDetectLoop() {
+  if (state.appMode === 'track' || !state.camOn) return;
+  detectLoopOn = true;
+  const token = ++detectLoopToken;
+  const src = trackVideo || video;
+  fpsMeter.rvfc = !!(src && typeof src.requestVideoFrameCallback === 'function');
+  const onFrame = (now) => {
+    if (!detectLoopOn || token !== detectLoopToken) return;
+    detect(typeof now === 'number' ? now : performance.now());
+    const el = trackVideo || video;
+    if (el && typeof el.requestVideoFrameCallback === 'function') el.requestVideoFrameCallback(onFrame);
+    else requestAnimationFrame(onFrame);
+  };
+  if (src && typeof src.requestVideoFrameCallback === 'function') src.requestVideoFrameCallback(onFrame);
+  else requestAnimationFrame(onFrame);
+}
+
+function stopDetectLoop() {
+  detectLoopOn = false;
+  detectLoopToken++;
+}
+
 function detect(now) {
   if (ar.session || renderer.xr.isPresenting) return; // AR 進行中暫停手勢相機推論
+  if (!state.camOn || state.appMode === 'track') return;
   const src = trackVideo || video;
-  if (!landmarker || !src || src.readyState < 2 || now - lastDetect < 33) return;
+  if (!landmarker || !src || src.readyState < 2) return;
   if (src.currentTime === lastVideoTime) return; lastVideoTime = src.currentTime; lastDetect = now;
-  let res; try { res = landmarker.detectForVideo(src, now); } catch (e) { console.warn(e); return; }
+  const t0 = performance.now();
+  const input = detectSource(src);
+  let res; try { res = landmarker.detectForVideo(input, now); } catch (e) { console.warn(e); return; }
+  const inferMs = performance.now() - t0;
+  fpsMeter.detMs = fpsMeter.detMs ? fpsMeter.detMs * 0.8 + inferMs * 0.2 : inferMs;
+  fpsMeter.detN++;
+  if (!fpsMeter.detT) fpsMeter.detT = t0;
+  if (t0 - fpsMeter.detT >= 500) {
+    fpsMeter.detFps = Math.round(fpsMeter.detN * 1000 / (t0 - fpsMeter.detT));
+    fpsMeter.detN = 0;
+    fpsMeter.detT = t0;
+    state.detFps = fpsMeter.detFps;
+    state.detMs = Math.round(fpsMeter.detMs);
+  }
   const lm = res.landmarks?.[0];
   drawHand(lm);
   const mirrored = state.camMode === 'dual' || state.facing === 'user';
@@ -1462,8 +1542,6 @@ function detect(now) {
     ignore: now < ignoreGesturesUntil,
     zoom: state.tZoom, clampZ,
   });
-  state.tYaw += r.dYaw;
-  state.tPitch = clampP(state.tPitch + r.dPitch);
   if (r.status === 'pinch') state.tZoom = r.zoom;
   if (state.appMode === 'assembly') {
     if (r.triggered === 'explode') assembly?.next();
@@ -1514,6 +1592,7 @@ function updateDebug(r) {
     `mode=${state.appMode || 'demo'} pose=${d.pose || '-'} raw=${d.raw || '-'} status=${d.status || state.gesture || '-'}`,
     `hold=${Math.round((d.hold || 0) * 100)}% last=${d.lastAction || '-'} nExt=${d.nExt ?? '-'} nCurled=${d.nCurled ?? '-'}`,
     `cam=${state.camMode} kind=${state.dualKind || '-'} facing=${state.facing} on=${!!state.camOn}`,
+    `fps det=${fpsMeter.detFps || 0} infer=${Math.round(fpsMeter.detMs)}ms rend=${fpsMeter.drawFps || 0} rvfc=${fpsMeter.rvfc ? 1 : 0} src=${fpsMeter.srcW || '-'}`,
     `clearAlpha=${renderer.getClearAlpha()} still=${stillIsNonBlack() ? 'ok' : 'no'} bg=${scene.background == null ? 'null' : 'set'}`,
   ].join('\n');
 }
@@ -1552,7 +1631,75 @@ function updateModeTabs() {
   document.querySelectorAll('.legend-asm').forEach((el) => { el.hidden = state.appMode !== 'assembly'; });
 }
 
-let trackMod = null, trackAssets = null, trackSession = null, trackBusy = false;
+let trackMod = null, trackAssets = null, trackSession = null, trackBusy = false, trackPreloadP = null;
+const TRACK_CACHE = 'gesture-demo-track-v1';
+const TRACK_FILES = [
+  { url: () => rel('track/track-mode.bundle.js'), bytes: 2810444, w: 0.62 },
+  { url: () => rel('track/targets.mind'), bytes: 753330, w: 0.22 },
+  { url: () => rel('models/server.glb'), bytes: 572000, w: 0.14 },
+  { url: () => rel('models/parts.json'), bytes: 8000, w: 0.02 },
+];
+
+function updateTrackProgress(pct, status) {
+  const p = Math.max(0, Math.min(100, Math.round((pct || 0) * 100)));
+  state.trackPreloadPct = p;
+  state.trackPreloadStatus = status;
+  const label = status === 'ready' ? '已就緒' : status === 'error' ? '預載失敗' : `預載中 ${p}%`;
+  const tab = $('#trackTabProg'); if (tab) tab.textContent = (status === 'idle') ? '' : label;
+  const bar = $('#trackBar'); if (bar) bar.style.width = `${status === 'ready' ? 100 : p}%`;
+  const txt = $('#trackLoadTxt');
+  if (txt) {
+    if (status === 'ready') txt.textContent = '資源已就緒。請按下「開啟相機」（第一次需你親自點按，瀏覽器才會允許後鏡頭）。';
+    else if (status === 'error') { /* keep error text */ }
+    else txt.textContent = `載入追蹤資源… ${p}%`;
+  }
+  const start = $('#trackStart');
+  if (start && status === 'ready') start.disabled = false;
+  if (start && status === 'load') start.disabled = true;
+}
+
+async function openTrackCache() {
+  try { return await caches.open(TRACK_CACHE); } catch { return null; }
+}
+
+async function cacheTrackUrl(url, onDelta) {
+  const cache = await openTrackCache();
+  if (cache) {
+    try {
+      const hit = await cache.match(url, { ignoreSearch: true });
+      if (hit) {
+        const buf = await hit.arrayBuffer();
+        onDelta(buf.byteLength);
+        return buf;
+      }
+    } catch {}
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('下載失敗 ' + String(url).split('/').pop());
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const buf = await res.arrayBuffer();
+    onDelta(buf.byteLength);
+    if (cache) try { await cache.put(url, new Response(buf, { headers: { 'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream' } })); } catch {}
+    return buf;
+  }
+  const chunks = [];
+  let n = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    n += value.byteLength;
+    onDelta(value.byteLength);
+  }
+  const u8 = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) { u8.set(c, o); o += c.byteLength; }
+  if (cache) {
+    try { await cache.put(url, new Response(u8, { headers: { 'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream' } })); } catch {}
+  }
+  return u8.buffer;
+}
 
 function resetTrackHud() {
   document.body.classList.remove('searching', 'found');
@@ -1560,6 +1707,8 @@ function resetTrackHud() {
   const start = $('#trackStart'); if (start) { start.disabled = !trackAssets; start.textContent = '開啟相機'; }
   const name = $('#trackLabel .name'); if (name) name.textContent = '整機';
   const spec = $('#trackLabel .spec'); if (spec) spec.textContent = '2U 機架式伺服器（示例）';
+  if (trackAssets) updateTrackProgress(1, 'ready');
+  else if (state.trackPreloadStatus === 'load') updateTrackProgress((state.trackPreloadPct || 0) / 100, 'load');
   syncTrackPips(0);
 }
 
@@ -1579,38 +1728,80 @@ function syncTrackPips(index) {
 
 async function loadTrackModule() {
   if (trackMod) return trackMod;
+  try {
+    const link = document.createElement('link');
+    link.rel = 'modulepreload';
+    link.href = rel('track/track-mode.bundle.js');
+    if (!document.head.querySelector('link[rel="modulepreload"][href*="track-mode.bundle"]')) document.head.appendChild(link);
+  } catch {}
   trackMod = await import(rel('track/track-mode.bundle.js'));
   return trackMod;
 }
 
 async function preloadTrack() {
-  const bar = $('#trackBar');
-  const txt = $('#trackLoadTxt');
-  const start = $('#trackStart');
-  if (txt) txt.textContent = '準備資源…';
-  if (start) start.disabled = true;
-  try {
-    await loadTrackModule();
-    if (!trackAssets) {
-      trackAssets = await trackMod.preload({
-        baseUrl: rel('./'),
-        imageTargetSrc: rel('track/targets.mind'),
-        model: rel('models/server.glb'),
-        onProgress: (p) => {
-          if (bar) bar.style.width = `${Math.round((p || 0) * 100)}%`;
-          if (txt) txt.textContent = `載入追蹤資源… ${Math.round((p || 0) * 100)}%`;
-        },
-      });
+  if (trackAssets) { updateTrackProgress(1, 'ready'); state.trackReady = true; return trackAssets; }
+  if (trackPreloadP) return trackPreloadP;
+  const t0 = performance.now();
+  state.trackPreloadStart = t0;
+  updateTrackProgress(0, 'load');
+  trackPreloadP = (async () => {
+    try {
+      const weights = TRACK_FILES;
+      const totals = weights.map((f) => f.bytes);
+      const loaded = weights.map(() => 0);
+      const tick = () => {
+        let p = 0;
+        weights.forEach((f, i) => { p += f.w * Math.min(1, loaded[i] / (totals[i] || 1)); });
+        updateTrackProgress(p, 'load');
+      };
+      tick();
+      const bufs = await Promise.all(weights.map(async (f, i) => {
+        const url = f.url();
+        const buf = await cacheTrackUrl(url, (d) => { loaded[i] += d; tick(); });
+        return { url, buf };
+      }));
+      const by = Object.fromEntries(bufs.map((b) => [b.url, b.buf]));
+      await loadTrackModule();
+      if (!trackAssets) {
+        const mindUrl = rel('track/targets.mind');
+        const glbUrl = rel('models/server.glb');
+        let parts;
+        try { parts = JSON.parse(new TextDecoder().decode(by[rel('models/parts.json')])); } catch { parts = null; }
+        trackAssets = await trackMod.preload({
+          baseUrl: rel('./'),
+          imageTargetSrc: by[mindUrl] || mindUrl,
+          model: by[glbUrl] || glbUrl,
+          parts,
+          onProgress: (p) => updateTrackProgress(0.9 + (p || 0) * 0.1, 'load'),
+        });
+      }
+      state.trackReady = true;
+      state.trackPreloadMs = Math.round(performance.now() - t0);
+      updateTrackProgress(1, 'ready');
+      return trackAssets;
+    } catch (e) {
+      console.warn(e);
+      trackPreloadP = null;
+      updateTrackProgress(state.trackPreloadPct / 100 || 0, 'error');
+      const txt = $('#trackLoadTxt');
+      if (txt) txt.textContent = '資源載入失敗：' + (e.message || e);
+      toast('圖像追蹤資源載入失敗：' + (e.message || e));
+      throw e;
     }
-    if (bar) bar.style.width = '100%';
-    if (txt) txt.textContent = '資源就緒。請按下「開啟相機」（需你親自點按，瀏覽器才會允許後鏡頭）。';
-    if (start) start.disabled = false;
-    state.trackReady = true;
-  } catch (e) {
-    console.warn(e);
-    if (txt) txt.textContent = '資源載入失敗：' + (e.message || e);
-    toast('圖像追蹤資源載入失敗：' + (e.message || e));
-  }
+  })();
+  return trackPreloadP;
+}
+
+function scheduleTrackWarmup() {
+  const start = () => {
+    preloadTrack().catch((e) => console.warn('預載入圖像追蹤失敗', e));
+  };
+  const afterMp = () => {
+    if ('requestIdleCallback' in window) requestIdleCallback(() => start(), { timeout: 2500 });
+    else setTimeout(start, 400);
+  };
+  if (state.mpPrefetchDone) afterMp();
+  else Promise.resolve(mpPrefetchP || prefetchMpAssets(false)).then(afterMp, afterMp);
 }
 
 async function startTrackSession() {
@@ -1641,6 +1832,8 @@ async function startTrackSession() {
     document.body.classList.add('searching');
     document.body.classList.remove('found');
     state.trackOn = true;
+    state.camPermitted = true;
+    state.trackCamAllowed = true;
     syncTrackPips(0);
   } catch (e) {
     console.warn(e);
@@ -1673,7 +1866,13 @@ async function enterTrackMode() {
   const tEl = $('#docTitle'); if (tEl) tEl.textContent = '圖像追蹤';
   const n = $('#deviceName'); if (n) n.textContent = '對準卡片，轉動切換零件';
   resetTrackHud();
-  preloadTrack();
+  const ready = !!trackAssets;
+  const tEnter = performance.now();
+  await preloadTrack().catch(() => {});
+  state.trackEnterToReadyMs = Math.round(performance.now() - tEnter);
+  if (trackAssets && (state.camPermitted || state.trackCamAllowed) && !trackSession && !trackBusy) {
+    await startTrackSession();
+  }
 }
 
 async function leaveTrackMode() {
@@ -1743,6 +1942,7 @@ state.stillIsNonBlack = stillIsNonBlack;
 state.startTrack = startTrackSession;
 state.stopTrack = stopTrackSession;
 state.preloadTrack = preloadTrack;
+state.fpsMeter = fpsMeter;
 
 // 啟動
 const bootQs = new URLSearchParams(location.search);
@@ -1761,6 +1961,7 @@ loadModel().then(async () => {
   if (initialMode !== 'track') renderer.setAnimationLoop(frame);
   registerMpWorker();
   scheduleMpWarmup();
+  if (initialMode !== 'track') scheduleTrackWarmup();
 }).catch((e) => { console.error(e); $('#loadtxt').textContent = '模型載入失敗：' + e.message; });
 // 測試用：?auto=cam 一律單鏡頭；?auto=dual / ?auto=touch 仍可跳過開始畫面
 const auto = bootQs.get('auto');

@@ -103,8 +103,11 @@
     z-index: 8; display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--glass);
     border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); pointer-events: auto; }
   #modeTabs button { appearance: none; border: 0; background: transparent; color: #c5d0de; font: inherit;
-    font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+    font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+    display: inline-flex; flex-direction: column; align-items: center; line-height: 1.15; gap: 1px; }
   #modeTabs button[aria-selected="true"] { background: #3aa0ff; color: #fff; }
+  #trackTabProg { font-size: 9px; font-weight: 650; opacity: .9; letter-spacing: 0; }
+  #trackTabProg:empty { display: none; }
   header { padding-top: calc(env(safe-area-inset-top) + 48px) !important; }
   #gesture { top: calc(env(safe-area-inset-top) + 96px); }
   #camHint { top: calc(env(safe-area-inset-top) + 136px); }
@@ -267,7 +270,7 @@
 <nav id="modeTabs" role="tablist" aria-label="模式">
   <button type="button" data-app-mode="demo" aria-selected="true">展示</button>
   <button type="button" data-app-mode="assembly">組裝</button>
-  <button type="button" data-app-mode="track">圖像追蹤</button>
+  <button type="button" data-app-mode="track">圖像追蹤<small id="trackTabProg"></small></button>
 </nav>
 <div id="gesture">
   <span id="gicoWrap">
